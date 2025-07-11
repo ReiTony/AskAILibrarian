@@ -15,16 +15,10 @@ from utils.language_translator import (
 )
 
 router = APIRouter()
-
 logger = logging.getLogger("library_info_route")
 
 LOCATION_ALIASES = {
-    "University Library": [
-        "university library",
-        "main library",
-        "msu library",
-        "campus library",
-    ],
+    "University Library": ["university library", "main library", "msu library", "campus library"],
     "American Corner Marawi": ["american corner", "american library", "ac marawi"],
     "Access Services Division": ["access services", "access division"],
     "Administrative Services Division": ["admin services", "administrative division"],
@@ -32,54 +26,11 @@ LOCATION_ALIASES = {
 }
 
 STOPWORDS = {
-    "what",
-    "are",
-    "the",
-    "is",
-    "at",
-    "to",
-    "a",
-    "of",
-    "for",
-    "i",
-    "do",
-    "in",
-    "on",
-    "by",
-    "can",
-    "how",
-    "and",
-    "an",
-    "does",
-    "with",
-    "from",
-    "my",
-    "me",
-    "about",
-    "obtain",
-    "get",
-    "apply",
-    "steps",
-    "process",
-    "please",
-    "provide",
-    "information",
-    "explain",
-    "give",
-    "list",
-    "details",
-    "tell",
-    "need",
-    "show",
-    "am",
-    "required",
-    "requirements",
-    "card",
-    "way",
-    "would",
-    "like",
+    "what", "are", "the", "is", "at", "to", "a", "of", "for", "i", "do", "in", "on", "by", "can",
+    "how", "and", "an", "does", "with", "from", "my", "me", "about", "obtain", "get", "apply",
+    "steps", "process", "please", "provide", "information", "explain", "give", "list", "details",
+    "tell", "need", "show", "am", "required", "requirements", "card", "way", "would", "like",
 }
-
 
 def simplify_query(query):
     q = query.lower()
@@ -87,7 +38,6 @@ def simplify_query(query):
     q = " ".join(q.split())
     words = [word for word in q.split() if word not in STOPWORDS]
     return " ".join(words)
-
 
 def detect_locations(query):
     matches = []
@@ -99,14 +49,12 @@ def detect_locations(query):
                 break
     return matches
 
-
 def format_response(answer: str, suggestions: list) -> dict:
     response = {"answer": answer.strip()}
     prefix = "reminder" if suggestions == default_reminders else "suggestion"
     for i, suggestion in enumerate(suggestions[:3], 1):
         response[f"{prefix}{i}"] = suggestion
     return response
-
 
 @router.post("/library_info")
 async def library_info(
@@ -134,18 +82,52 @@ async def library_info(
             for msg in history
         ])
 
+        intent_prompt = (
+            "Classify the user's intent.\n\n"
+            "If the question is related to library services (like books, borrowing, locations, library staff, etc.), reply with: library\n"
+            "If the question is general, personal, or off-topic (like greetings, languages, preferences, abilities), reply with: general\n\n"
+            f"User Question: {translated_query}\n"
+            "Intent:"
+        )
+        try:
+            intent_response = await generate_response(intent_prompt)
+            intent = intent_response.strip().lower()
+            logger.info(f"[Intent Detection] Query: '{translated_query}' → Intent: {intent}")
+        except Exception as e:
+            logger.warning(f"Intent detection failed: {e}")
+            intent = "library"
+
+        if intent == "general":
+            prompt = library_fallback_prompt(history_text, translated_query)
+            try:
+                bot_response = await generate_response(prompt)
+            except Exception as e:
+                logger.error(f"LLM fallback error: {e}")
+                bot_response = "Sorry, I couldn't respond at the moment."
+
+            translated_response = await translate_to_user_language(bot_response, user_lang)
+            response_content = format_response(translated_response, default_reminders)
+
+            try:
+                await chat_session.add_message("user", user_query)
+                await chat_session.add_message("assistant", translated_response)
+            except Exception as e:
+                logger.error(f"Chat session log error: {e}")
+
+            response_content["history"] = await chat_session.get_history()
+            return JSONResponse(content=response_content, status_code=200)
+
+
         try:
             simple_query = simplify_query(translated_query)
             results_original = web_db.similarity_search_with_score(translated_query, k=5)
             results_simple = web_db.similarity_search_with_score(simple_query, k=5) if simple_query != translated_query else []
-
             best_results = results_original
             if results_simple:
                 top_score_original = max([score for _, score in results_original], default=0)
                 top_score_simple = max([score for _, score in results_simple], default=0)
                 if top_score_simple > top_score_original:
                     best_results = results_simple
-
             results = best_results
         except Exception as e:
             logger.error(f"Chroma similarity search error: {e}")
