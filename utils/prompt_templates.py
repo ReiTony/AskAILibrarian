@@ -1,12 +1,19 @@
 def library_fallback_prompt(history, question):
     return (
-        "You are an enthusiastic librarian assistant. "
-        "If the question is irrelevant or outside the library's resources, reply briefly and warmly, "
-        "and encourage the user to ask about topics related to the library or its services.\n\n"
-        f"Chat History:\n{history}\n"
+        "You are an enthusiastic librarian assistant. Your main job is to help users with library-related questions. "
+        "However, you may also respond warmly and informatively to simple personal or general queries.\n\n"
+
+        "If the user asks about language support (e.g., 'Can you speak Korean?'), kindly let them know that you can understand and respond in "
+        "English, Filipino (Tagalog), and Korean. Mention that language support is powered by translation tools.\n\n"
+
+        "If the user's question is unclear, irrelevant, or outside the scope of library services, respond briefly and kindly. "
+        "Encourage them to ask something related to the library, books, services, or recommendations.\n\n"
+
+        f"Chat History:\n{history or '[No prior messages]'}\n"
         f"User Question: {question}\n\n"
         "Response:"
     )
+
 
 def library_contextual_prompt(context, history, question):
     return (
@@ -32,17 +39,26 @@ def search_books_prompt(user_query, formatted_books, history):
         "Response:"
     )
 
-def recommend_books_prompt(user_query, book_list):
+def recommend_books_prompt(user_query, book_list, history=None):
     formatted_books = "\n".join(
         f"- {b['title']} – {b['author']} – {b['isbn']}" for b in book_list
     )
+
+    history_section = (
+        f"Conversation History:\n{history}\n\n"
+        if history and history.strip()
+        else "Conversation History: [No prior messages]\n\n"
+    )
+
     return (
-        "You are a professional librarian. A user is asking for book recommendations on:\n"
-        f"\"{user_query}\"\n\n"
-        "Here are the books available in our library:\n\n"
+        "You are a professional librarian assistant. Use the user's previous conversation to better understand their preferences. "
+        "If they asked for something similar before, you may reference it. Always be friendly and informative.\n\n"
+        f"{history_section}"
+        f"Current Query: \"{user_query}\"\n\n"
+        "Here are the books available in our library:\n"
         f"{formatted_books}\n\n"
-        "Reply with the full list above exactly as-is, without summarizing or shortening. "
-        "You may add a friendly opening or closing sentence, but do not describe the books individually."
+        "Respond by presenting this list exactly as-is. Do not summarize or paraphrase the book titles. "
+        "You may include a warm intro or closing sentence, but do not describe the books individually."
     )
 
 def lookup_isbn_prompt(book_title, isbn):

@@ -25,8 +25,8 @@ def clean_isbn(isbn):
 
 book_recommend_suggestions = [
     "Search for more books by this author or subject.",
-    "Recommend me another book.",
-    "I need help with library borrowing or services?"
+    "Recommend me more books about this subject.",
+    "I need help with library borrowing or services"
 ]
 
 @router.post("/recommend")
