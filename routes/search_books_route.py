@@ -109,6 +109,7 @@ async def search_books_api(
             logger.error(f"Error adding assistant message to chat session: {e}")
 
         return JSONResponse(content={
+            "type": "booksearch",
             "answer": bot_response,
             "suggestion1": "You can check the availability of these books at our library.",
             "suggestion2": "Would you like to know more about any specific book?",
@@ -117,5 +118,5 @@ async def search_books_api(
 
     except Exception as e:
         logger.error(f"Error occurred in /search_books: {e}")
-        # Do not leak details
+
         return JSONResponse(content={"error": "Internal server error."}, status_code=500)
