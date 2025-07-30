@@ -77,3 +77,4 @@ venv/
 chroma/
 data/
 db_populate/
+deprecated/
