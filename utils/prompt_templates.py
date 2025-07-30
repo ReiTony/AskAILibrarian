@@ -26,19 +26,6 @@ def library_contextual_prompt(context, history, question):
         "Response:"
     )
 
-# def search_books_prompt(user_query, formatted_books, history):
-#     return (
-#         "You are a helpful librarian. The user asked about books related to the following topic:\n"
-#         f'"{user_query}".\n\n'
-#         "Here are the matching books from our library catalog:\n"
-#         f"{formatted_books}\n\n"
-#         "Previous Conversation:\n"
-#         f"{history}\n\n"
-#         "Reply in a friendly and enthusiastic tone. For each book, include the title, author, ISBN, quantity available, and publisher."
-#         "\nIf no books match, encourage the user to try a different search.\n\n"
-#         "Response:"
-#     )
-
 def search_books_prompt(user_query, history):
     return (
         "You're a helpful librarian assistant. The user is looking for books about:\n"
