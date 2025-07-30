@@ -3,16 +3,19 @@ from rapidfuzz import fuzz
 from rapidfuzz.fuzz import token_sort_ratio
 import logging
 
-
 logger = logging.getLogger("text_utils")
-# Load spaCy English model once
+
+# Load spaCy English model once to tokenize and process user queries
 nlp = spacy.load("en_core_web_sm")
 
 # --------------------------------------
-# Replaces null/empty values with fallback
+# Utility: Replace null or invalid values
 # --------------------------------------
 def replace_null(value):
-    """Return cleaned string if valid; else return 'Not Available'."""
+    """
+    Cleans a given value by checking for null/empty/invalid cases.
+    Returns a standardized placeholder string if invalid.
+    """
     if value is None:
         return "Not Available"
     
@@ -23,28 +26,42 @@ def replace_null(value):
     return str_val
 
 # --------------------------------------
-# Preprocess query using spaCy tokenizer
+# Utility: Clean query string for processing
 # --------------------------------------
 def clean_query_text(query: str) -> str:
-    """Removes punctuation and lowercases the input query."""
+    """
+    Uses spaCy to tokenize and remove punctuation.
+    Lowercases all tokens and returns a clean string.
+    """
     doc = nlp(query)
     tokens = [token.text.lower() for token in doc if not token.is_punct]
     return " ".join(tokens)
 
-
 # ----------------------------------------------------------------
-# Check if tokens match target keywords using string similarity
+# Keyword Detection: Fuzzy match individual tokens with a set
 # ----------------------------------------------------------------
 def fuzzy_match_keywords(query_tokens: list[str], keywords: set[str], threshold: int = 90) -> bool:
-    """Returns True if any token matches keywords directly or via fuzzy match."""
+    """
+    Matches tokens from the user query with target keywords.
+    Uses both exact match and fuzzy partial ratio scoring.
+
+    Parameters:
+        query_tokens: list of individual tokens from the query
+        keywords: set of valid trigger keywords
+        threshold: fuzzy score threshold to qualify as match
+
+    Returns:
+        True if a match is found, else False
+    """
+    # Remove short or stopword tokens
     filtered_tokens = [token for token in query_tokens if len(token) > 2 and not nlp(token)[0].is_stop]
 
-    # Exact keyword match
+    # Check for exact match
     for token in filtered_tokens:
         if token in keywords:
             return True
 
-    # Fuzzy match comparison
+    # Apply fuzzy partial ratio match
     for token in filtered_tokens:
         for keyword in keywords:
             score = fuzz.partial_ratio(token, keyword)
@@ -54,11 +71,21 @@ def fuzzy_match_keywords(query_tokens: list[str], keywords: set[str], threshold:
 
     return False
 
-
+# ----------------------------------------------------------------
+# Fuzzy match full query to target phrases (stricter)
+# ----------------------------------------------------------------
 def fuzzy_match_text_to_targets(query: str, *targets: str, threshold: int = 75) -> bool:
     """
-    Fuzzy match a query string against one or more target strings using token_sort_ratio.
-    This is stricter and accounts for word order/duplicates.
+    Performs a stricter fuzzy match between the full cleaned query
+    and one or more target phrases, using token_sort_ratio.
+
+    Parameters:
+        query: the user query string
+        targets: one or more string targets to compare with
+        threshold: minimum score to count as match
+
+    Returns:
+        True if match found, False otherwise
     """
     query_clean = clean_query_text(query)
 
@@ -66,7 +93,6 @@ def fuzzy_match_text_to_targets(query: str, *targets: str, threshold: int = 75) 
         if not target:
             continue
         target_clean = clean_query_text(target)
-
         score = token_sort_ratio(query_clean, target_clean)
         logger.debug(f"[FuzzyMatch] '{query_clean}' vs '{target_clean}' → Score: {score}")
         if score >= threshold:
@@ -74,11 +100,25 @@ def fuzzy_match_text_to_targets(query: str, *targets: str, threshold: int = 75) 
 
     return False
 
-
+# ----------------------------------------------------------------
+# Intent Classification for Book Queries
+# ----------------------------------------------------------------
 def classify_book_intent(query: str) -> str:
+    """
+    Classifies the user's query into one of the following intents:
+    - 'isbn_lookup'
+    - 'recommend'
+    - 'search' (default fallback)
+
+    Returns:
+        One of: 'isbn_lookup', 'recommend', 'search'
+    """
     q = query.lower()
+
     if "isbn" in q:
         return "isbn_lookup"
+
     if any(kw in q for kw in ["recommend", "suggest", "can you recommend"]):
         return "recommend"
+
     return "search"
