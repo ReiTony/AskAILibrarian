@@ -62,7 +62,8 @@ def search_books(search_type: str, query: str):
                         'publisher': book.get('publisher', 'N/A'),
                         'isbn': book.get('isbn', 'N/A'),
                         'quantity': book.get('quantity', 'N/A'),
-                        'author': book.get('author', 'N/A')
+                        'author': book.get('author', 'N/A'),
+                        'year': book.get('copyright_date', 'N/A'),
                     }
                     for book in data
                 ]
