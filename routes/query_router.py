@@ -1,20 +1,21 @@
 import logging
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends
 
 from utils.sessions import ChatSession, get_chat_session
-from routes.test import search_books_api
-from routes.recommend_books_route import recommend_books
-from routes.library_info_routes import library_info
-from routes.lookup_book_route import lookup_isbn  
+from routes.librarian_router import search_books_api  
+from routes.library_info_router import library_info
 from utils.text_utils import fuzzy_match_keywords
 from utils.language_translator import detect_language, translate_to_english
 
 logger = logging.getLogger("query_router")
 router = APIRouter()
 
-SEARCH_BOOKS_KEYWORDS = {"search", "quantity", "title", "find", "lookup", "copies", "available"}
-RECOMMEND_BOOKS_KEYWORDS = {"recommend", "suggest", "recommendation", "like", "similar", "same"}
-ISBN_LOOKUP_KEYWORDS = {"isbn"}  
+# Unified keyword pool (route logic now handled in search_books_api)
+SEARCH_BOOKS_KEYWORDS = {
+    "search", "quantity", "title", "find", "lookup", "copies", "available",
+    "recommend", "suggest", "recommendation", "like", "similar", "same",
+    "isbn"
+}
 
 @router.post("/query_router")
 async def query_router(
@@ -32,24 +33,16 @@ async def query_router(
 
         user_lang = detect_language(user_query)
         translated_query = await translate_to_english(user_query, user_lang)
-        logger.info(f"Translated query for routing: '{translated_query}'")
+        logger.info(f"Translated query: '{translated_query}'")
 
         tokens = translated_query.lower().split()
         logger.info(f"Tokens (EN): {tokens}")
-        
-        if fuzzy_match_keywords(tokens, ISBN_LOOKUP_KEYWORDS):
-            logger.info("Routing to: lookup_isbn")
-            return await lookup_isbn(request, chat_session)
 
-        if fuzzy_match_keywords(tokens, SEARCH_BOOKS_KEYWORDS):
+        if fuzzy_match_keywords(tokens, SEARCH_BOOKS_KEYWORDS, threshold=75):
             logger.info("Routing to: search_books_api")
             return await search_books_api(request, chat_session)
 
-        if fuzzy_match_keywords(tokens, RECOMMEND_BOOKS_KEYWORDS):
-            logger.info("Routing to: recommend_books")
-            return await recommend_books(request, chat_session)
-
-        logger.info("Routing to: library_info (fallback handler)")
+        logger.info("Routing to: library_info (fallback)")
         return await library_info(request, chat_session)
 
     except Exception as e:

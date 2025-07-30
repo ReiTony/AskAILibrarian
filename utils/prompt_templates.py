@@ -43,37 +43,30 @@ def search_books_prompt(user_query, history):
     return (
         "You're a helpful librarian assistant. The user is looking for books about:\n"
         f"\"{user_query}\"\n\n"
-        "The actual book list is provided by a background system — do not make up or list books yourself.\n\n"
-        "DO NOT mention how they're retrieved.\n"
+        "The actual book list will be shown to the user by the system — DO NOT write or mention any placeholder like '[Insert book list here]' or '[Book list will appear here]'.\n"
+        "DO NOT list books yourself. DO NOT refer to how they are retrieved.\n\n"
         "Your job is to:\n"
-        "- Introduce the results (e.g., 'Here are the books we found...')\n"
-        "- Suggest ways to refine the search if needed (e.g., subtopics or genres)\n"
-        "- Offer further help briefly and naturally\n\n"
+        "- Briefly introduce the results (e.g., 'Here are the books we found about...')\n"
+        "- Suggest ways to refine the search (e.g., subtopics, genres)\n"
+        "- Offer help naturally if they want more guidance\n\n"
         f"Chat history:\n{history}\n\n"
-        "Respond:"
+        "Respond with a short, natural message — no placeholders."
     )
-
-def recommend_books_prompt(user_query, book_list, history=None):
-    formatted_books = "\n".join(
-        f"- {b['title']} – {b['author']} – {b['isbn']}" for b in book_list
-    )
-
-    history_section = (
-        f"Conversation History:\n{history}\n\n"
-        if history and history.strip()
-        else "Conversation History: [No prior messages]\n\n"
-    )
-
+    
+def recommend_books_prompt(user_query, history):
     return (
-        "You are a professional librarian assistant. Use the user's previous conversation to better understand their preferences. "
-        "If they asked for something similar before, you may reference it. Always be friendly and informative.\n\n"
-        f"{history_section}"
-        f"Current Query: \"{user_query}\"\n\n"
-        "Here are the books available in our library:\n"
-        f"{formatted_books}\n\n"
-        "Respond by presenting this list exactly as-is. Do not summarize or paraphrase the book titles. "
-        "You may include a warm intro or closing sentence, but do not describe the books individually."
+        "You're a friendly librarian assistant. The user is asking for book recommendations based on:\n"
+        f"\"{user_query}\"\n\n"
+        "The recommended book list will be shown to the user by the system — DO NOT write or mention any placeholder like '[Insert book list here]'.\n"
+        "DO NOT list books yourself. DO NOT refer to how the books were retrieved or selected.\n\n"
+        "Your job is to:\n"
+        "- Briefly introduce the list as curated recommendations\n"
+        "- Encourage the user to explore the titles shown\n"
+        "- Offer help naturally if they want more suggestions or have specific needs\n\n"
+        f"Chat history:\n{history}\n\n"
+        "Respond with a short, natural message — no placeholders."
     )
+
 
 def lookup_isbn_prompt(book_title, isbn):
     return (

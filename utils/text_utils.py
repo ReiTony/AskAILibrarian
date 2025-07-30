@@ -73,3 +73,12 @@ def fuzzy_match_text_to_targets(query: str, *targets: str, threshold: int = 75) 
             return True
 
     return False
+
+
+def classify_book_intent(query: str) -> str:
+    q = query.lower()
+    if "isbn" in q:
+        return "isbn_lookup"
+    if any(kw in q for kw in ["recommend", "suggest", "can you recommend"]):
+        return "recommend"
+    return "search"
