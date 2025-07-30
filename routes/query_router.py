@@ -2,7 +2,7 @@ import logging
 from fastapi import APIRouter, Request, Depends, HTTPException
 
 from utils.sessions import ChatSession, get_chat_session
-from routes.search_books_route import search_books_api
+from routes.test import search_books_api
 from routes.recommend_books_route import recommend_books
 from routes.library_info_routes import library_info
 from routes.lookup_book_route import lookup_isbn  

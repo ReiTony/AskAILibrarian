@@ -1,5 +1,6 @@
 import spacy
 from rapidfuzz import fuzz
+from rapidfuzz.fuzz import token_sort_ratio
 import logging
 
 
@@ -11,9 +12,15 @@ nlp = spacy.load("en_core_web_sm")
 # Replaces null/empty values with fallback
 # --------------------------------------
 def replace_null(value):
-    """Return value if not empty/null; else return 'Not Available'."""
-    return value if value not in [None, "None", ""] else "Not Available"
-
+    """Return cleaned string if valid; else return 'Not Available'."""
+    if value is None:
+        return "Not Available"
+    
+    str_val = str(value).strip()
+    if str_val.lower() in {"", "none", "null", "not available"}:
+        return "Not Available"
+    
+    return str_val
 
 # --------------------------------------
 # Preprocess query using spaCy tokenizer
@@ -44,5 +51,25 @@ def fuzzy_match_keywords(query_tokens: list[str], keywords: set[str], threshold:
             logger.debug(f"Matching token '{token}' with keyword '{keyword}': Score = {score}")
             if score >= threshold:
                 return True
+
+    return False
+
+
+def fuzzy_match_text_to_targets(query: str, *targets: str, threshold: int = 75) -> bool:
+    """
+    Fuzzy match a query string against one or more target strings using token_sort_ratio.
+    This is stricter and accounts for word order/duplicates.
+    """
+    query_clean = clean_query_text(query)
+
+    for target in targets:
+        if not target:
+            continue
+        target_clean = clean_query_text(target)
+
+        score = token_sort_ratio(query_clean, target_clean)
+        logger.debug(f"[FuzzyMatch] '{query_clean}' vs '{target_clean}' → Score: {score}")
+        if score >= threshold:
+            return True
 
     return False

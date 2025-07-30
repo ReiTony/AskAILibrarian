@@ -26,17 +26,31 @@ def library_contextual_prompt(context, history, question):
         "Response:"
     )
 
-def search_books_prompt(user_query, formatted_books, history):
+# def search_books_prompt(user_query, formatted_books, history):
+#     return (
+#         "You are a helpful librarian. The user asked about books related to the following topic:\n"
+#         f'"{user_query}".\n\n'
+#         "Here are the matching books from our library catalog:\n"
+#         f"{formatted_books}\n\n"
+#         "Previous Conversation:\n"
+#         f"{history}\n\n"
+#         "Reply in a friendly and enthusiastic tone. For each book, include the title, author, ISBN, quantity available, and publisher."
+#         "\nIf no books match, encourage the user to try a different search.\n\n"
+#         "Response:"
+#     )
+
+def search_books_prompt(user_query, history):
     return (
-        "You are a helpful librarian. The user asked about books related to the following topic:\n"
-        f'"{user_query}".\n\n'
-        "Here are the matching books from our library catalog:\n"
-        f"{formatted_books}\n\n"
-        "Previous Conversation:\n"
-        f"{history}\n\n"
-        "Reply in a friendly and enthusiastic tone. For each book, include the title, author, ISBN, quantity available, and publisher."
-        "\nIf no books match, encourage the user to try a different search.\n\n"
-        "Response:"
+        "You're a helpful librarian assistant. The user is looking for books about:\n"
+        f"\"{user_query}\"\n\n"
+        "The actual book list is provided by a background system — do not make up or list books yourself.\n\n"
+        "DO NOT mention how they're retrieved.\n"
+        "Your job is to:\n"
+        "- Introduce the results (e.g., 'Here are the books we found...')\n"
+        "- Suggest ways to refine the search if needed (e.g., subtopics or genres)\n"
+        "- Offer further help briefly and naturally\n\n"
+        f"Chat history:\n{history}\n\n"
+        "Respond:"
     )
 
 def recommend_books_prompt(user_query, book_list, history=None):
