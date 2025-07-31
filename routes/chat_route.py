@@ -5,7 +5,10 @@ from datetime import datetime
 from bson import ObjectId
 
 from utils.sessions import ChatSession, get_chat_session
-from schemas.chat_schemas import Email, SessionId, Sender, MessageText, NewName, MessageIndex, NewText, DeleteSubsequent
+from schemas.chat_schemas import (
+    CardNumber, SessionId, Sender, MessageText,
+    NewName, MessageIndex, NewText, DeleteSubsequent
+)
 from db.connection import get_db
 
 logger = logging.getLogger("chat_route")
@@ -23,9 +26,12 @@ def clean_object_ids(obj):
         return str(obj)
     return obj
 
+# --------------------------------------------
+# Save message to chat session
+# --------------------------------------------
 @router.post("/save-chat")
 async def save_chat(
-    email: Email,
+    cardnumber: CardNumber,
     sessionId: SessionId,
     sender: Sender,
     message: MessageText,
@@ -34,15 +40,15 @@ async def save_chat(
 ):
     chats = get_chat_collection(db)
     try:
-        chat = await chats.find_one({"email": email})
+        chat = await chats.find_one({"cardnumber": cardnumber})
         msg_obj = {"text": message, "sender": sender, "timestamp": datetime.utcnow()}
 
         await chat_session.add_message(sender, message)
-        logger.info(f"[Session {sessionId}] [User: {email}] {sender.capitalize()} said: {message}")
+        logger.info(f"[Session {sessionId}] [User: {cardnumber}] {sender.capitalize()} said: {message}")
 
         if not chat:
             new_chat = {
-                "email": email,
+                "cardnumber": cardnumber,
                 "sessions": [{
                     "sessionId": sessionId,
                     "name": None,
@@ -66,16 +72,19 @@ async def save_chat(
                 "startTime": datetime.utcnow()
             })
 
-        await chats.replace_one({"email": email}, chat)
+        await chats.replace_one({"cardnumber": cardnumber}, chat)
         return {"message": "Chat saved successfully", "savedMessages": session["messages"] if session else [msg_obj]}
     except Exception as e:
         logger.error(f"Save chat error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error.")
 
+# --------------------------------------------
+# Get chat history by cardnumber
+# --------------------------------------------
 @router.get("/get-chat-history")
-async def get_chat_history(email: str, db = Depends(get_db)):
+async def get_chat_history(cardnumber: str, db = Depends(get_db)):
     try:
-        chat = await get_chat_collection(db).find_one({"email": email})
+        chat = await get_chat_collection(db).find_one({"cardnumber": cardnumber})
         if not chat or "sessions" not in chat:
             return []
         cleaned_sessions = clean_object_ids(chat["sessions"])
@@ -84,16 +93,19 @@ async def get_chat_history(email: str, db = Depends(get_db)):
         logger.error(f"Get chat history error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error.")
 
-@router.delete("/delete-session/{email}/{sessionId}")
-async def delete_session(email: str, sessionId: str, db = Depends(get_db)):
+# --------------------------------------------
+# Delete chat session by session ID
+# --------------------------------------------
+@router.delete("/delete-session/{cardnumber}/{sessionId}")
+async def delete_session(cardnumber: str, sessionId: str, db = Depends(get_db)):
     chats = get_chat_collection(db)
     try:
-        chat = await chats.find_one({"email": email})
+        chat = await chats.find_one({"cardnumber": cardnumber})
         if not chat:
             raise HTTPException(status_code=404, detail="Chat history not found")
 
         chat["sessions"] = [s for s in chat["sessions"] if s["sessionId"] != sessionId]
-        await chats.replace_one({"email": email}, chat)
+        await chats.replace_one({"cardnumber": cardnumber}, chat)
         return {"message": "Chat session deleted successfully"}
     except HTTPException:
         raise
@@ -101,11 +113,14 @@ async def delete_session(email: str, sessionId: str, db = Depends(get_db)):
         logger.error(f"Delete session error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error.")
 
-@router.put("/update-chat-name/{email}/{sessionId}")
-async def update_chat_name(email: str, sessionId: str, newName: NewName, db = Depends(get_db)):
+# --------------------------------------------
+# Rename a chat session
+# --------------------------------------------
+@router.put("/update-chat-name/{cardnumber}/{sessionId}")
+async def update_chat_name(cardnumber: str, sessionId: str, newName: NewName, db = Depends(get_db)):
     chats = get_chat_collection(db)
     try:
-        chat = await chats.find_one({"email": email})
+        chat = await chats.find_one({"cardnumber": cardnumber})
         if not chat:
             raise HTTPException(status_code=404, detail="Chat history not found")
 
@@ -114,7 +129,7 @@ async def update_chat_name(email: str, sessionId: str, newName: NewName, db = De
             raise HTTPException(status_code=404, detail="Session not found")
 
         session["name"] = newName
-        await chats.replace_one({"email": email}, chat)
+        await chats.replace_one({"cardnumber": cardnumber}, chat)
         return {"message": "Chat name updated successfully"}
     except HTTPException:
         raise
@@ -122,9 +137,12 @@ async def update_chat_name(email: str, sessionId: str, newName: NewName, db = De
         logger.error(f"Update chat name error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error.")
 
-@router.put("/update-message/{email}/{sessionId}")
+# --------------------------------------------
+# Update a specific message in a chat session
+# --------------------------------------------
+@router.put("/update-message/{cardnumber}/{sessionId}")
 async def update_message(
-    email: str,
+    cardnumber: str,
     sessionId: str,
     messageIndex: MessageIndex,
     newText: NewText,
@@ -133,7 +151,7 @@ async def update_message(
 ):
     chats = get_chat_collection(db)
     try:
-        chat = await chats.find_one({"email": email})
+        chat = await chats.find_one({"cardnumber": cardnumber})
         if not chat:
             raise HTTPException(status_code=404, detail="Chat history not found")
 
@@ -146,7 +164,7 @@ async def update_message(
             if deleteSubsequent and messageIndex < len(session["messages"]) - 1:
                 session["messages"] = session["messages"][:messageIndex + 1]
 
-        await chats.replace_one({"email": email}, chat)
+        await chats.replace_one({"cardnumber": cardnumber}, chat)
         return {"message": "Message updated successfully", "updatedMessages": session["messages"]}
     except HTTPException:
         raise
