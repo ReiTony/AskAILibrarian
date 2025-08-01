@@ -306,9 +306,11 @@ async def search_books_api(
                 author = replace_null(book.get("author"))
                 isbn = replace_null(book.get("isbn"))
                 publisher = replace_null(book.get("publisher"))
+                biblio_id = replace_null(book.get("biblio_id"))
+                year = replace_null(book.get("year"))
                 key = f"{title}|{author}"
                 if key not in seen and title not in ["Unknown", "Not Available"]:
-                    aggregated[key] = {"title": title, "author": author, "isbn": isbn, "publisher": publisher}
+                    aggregated[key] = {"title": title, "author": author, "isbn": isbn, "publisher": publisher, "biblio_id": biblio_id, "year": year}
                     seen.add(key)
                 if len(aggregated) >= 10:
                     break
@@ -390,6 +392,7 @@ async def search_books_api(
                     author = replace_null(book.get("author"))
                     publisher = replace_null(book.get("publisher"))
                     year = replace_null(book.get("year"))
+                    biblio_id = replace_null(book.get("biblio_id"))
                     if title in ["Unknown", "Not Available"]:
                         continue
 
@@ -408,6 +411,7 @@ async def search_books_api(
                             "publisher": publisher.strip(" ,;:"),
                             "quantity_available": 1,
                             "year": year,
+                            "biblio_id": biblio_id,
                         }
 
                 formatted_books = list(aggregated.values())
