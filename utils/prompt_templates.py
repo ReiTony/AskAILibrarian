@@ -55,15 +55,16 @@ def recommend_books_prompt(user_query, history):
     )
 
 
-def lookup_isbn_prompt(book_title, isbn):
+def specific_book_found_prompt(book_title, isbn):
     return (
-        f"A user asked for the ISBN of the book '{book_title}'. The ISBN is {isbn}. "
-        "Reply in a friendly, helpful, librarian style. "
-        "If appropriate, offer further assistance."
+        f"Yes, we have the book titled *{book_title}* in our catalog. "
+        f"The ISBN for this book is {isbn}. "
+        "Let me know if you’d like help finding more details or locating it on the shelf!"
     )
 
-def lookup_isbn_not_found_prompt(book_title):
+
+def specific_book_not_found_prompt(query_text):
     return (
-        f"A user asked for the ISBN of '{book_title}', but no ISBN was found in our records. "
-        "Respond as a friendly librarian, apologizing and inviting the user to check the title or ask about another book."
+        f"Sorry, I couldn’t find a match in our catalog for \"{query_text}\". "
+        "Please double-check the title or ISBN, and feel free to ask about another book — I’m happy to help!"
     )
