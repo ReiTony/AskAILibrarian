@@ -62,6 +62,21 @@ def search_books(
 
     return {"error": "No books found."}
 
+
+def fetch_quantity_from_biblio_id(biblio_id: str) -> int:
+    """Fetch number of items available for a given biblio_id."""
+    try:
+        url = f"http://192.168.1.68:8080/api/v1/biblios/{biblio_id}/items"
+        headers = get_auth_headers()
+        response = requests.get(url, headers=headers, timeout=5)
+        response.raise_for_status()
+
+        items = response.json()
+        return len(items) if isinstance(items, list) else 0
+    except Exception as e:
+        print(f"[Koha] Error fetching quantity for biblio_id {biblio_id}: {e}")
+        return 0
+    
 # -------------------------------
 # Search Specific Book (e.g., ISBN)
 # -------------------------------
