@@ -6,7 +6,7 @@ from googletrans import Translator
 logger = logging.getLogger("translation")
 translator = Translator()
 
-ALLOWED_LANGUAGES = {"en", "tl", "ceb", "ko", "fi"}
+ALLOWED_LANGUAGES = {"en", "tl", "ceb", "ko"}
 
 def detect_language(text: str) -> str:
     try:

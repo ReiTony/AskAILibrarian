@@ -1,83 +1,106 @@
-import requests
-import json
 import base64
+import json
 import logging
+import requests
+from typing import Any, Literal, Union
 from decouple import config
 
 # -------------------------------
-# Koha API Configuration
+# Configuration
 # -------------------------------
 API_URL = config("KOHA_API")
 USERNAME = config("KOHA_USERNAME")
 PASSWORD = config("KOHA_PASSWORD")
-KOHA_REQUEST_TIMEOUT = 6  
+TIMEOUT = 6  # seconds
+
+logger = logging.getLogger("koha_client")
 
 # -------------------------------
-# Create Authorization Headers
+# Authentication Header
 # -------------------------------
-def get_auth_headers():
+def get_auth_headers() -> dict[str, str]:
     """Returns HTTP headers with Basic Auth for Koha API."""
-    auth_string = f"{USERNAME}:{PASSWORD}"
-    base64_auth_string = base64.b64encode(auth_string.encode('utf-8')).decode('utf-8')
+    auth = f"{USERNAME}:{PASSWORD}"
+    token = base64.b64encode(auth.encode()).decode()
     return {
-        'Authorization': f'Basic {base64_auth_string}',
-        'Accept': 'application/json'
+        "Authorization": f"Basic {token}",
+        "Accept": "application/json"
     }
-    
-# -------------------------------
-# Search Books by Type and Query
-# -------------------------------
-def search_books(search_type: str, query: str):
-    """
-    Searches books in Koha. Tries the full query and (at most) one backup phrase.
-    Returns list of books or an error message.
-    """
-    search_phrases = [query]
-    words = query.split()
-    if words and words[0] != query:
-        search_phrases.append(words[0])
 
+# -------------------------------
+# Search Books (General)
+# -------------------------------
+def search_books(
+    search_type: Literal["title", "author", "publisher"],
+    query: str
+) -> Union[list[dict[str, Any]], dict[str, str]]:
+    """
+    Searches Koha using the specified field (title, author, publisher).
+    Attempts both the full query and a fallback on the first word.
+    """
     headers = get_auth_headers()
-    last_error = None
-    logged_error = False
+    phrases = [query]
+    
+    if (words := query.split()) and words[0] != query:
+        phrases.append(words[0])
 
-    for idx, phrase in enumerate(search_phrases):
-        search_params = {
-            search_type: {'-like': f"%{phrase}%"}
-        }
-        encoded_query = json.dumps(search_params)
-        url = f'{API_URL}?q={encoded_query}'
-
-        logging.info(f"Trying search with phrase: {phrase}")
-
+    for phrase in phrases:
+        params = {search_type: {"-like": f"%{phrase}%"}}
         try:
-            response = requests.get(url, headers=headers, timeout=KOHA_REQUEST_TIMEOUT)
+            url = f"{API_URL}?q={json.dumps(params)}"
+            logger.info(f"[Koha Search] Searching {search_type} with: {phrase}")
+            response = requests.get(url, headers=headers, timeout=TIMEOUT)
             response.raise_for_status()
-            data = response.json()
 
-            if data:
-                return [
-                    {
-                        'title': book.get('title', 'N/A'),
-                        'publisher': book.get('publisher', 'N/A'),
-                        'isbn': book.get('isbn', 'N/A'),
-                        'quantity': book.get('quantity', 'N/A'),
-                        'author': book.get('author', 'N/A'),
-                        'year': book.get('copyright_date', 'N/A'),
-                        'biblio_id': book.get('biblio_id', 'N/A'),
-                    }
-                    for book in data
-                ]
-        except (requests.exceptions.RequestException, json.JSONDecodeError) as e:
-            last_error = e
-            if not logged_error:
-                logging.error(f"Koha API error: {e}")
-                logged_error = True
-            if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
-                break
-            continue
+            books = response.json()
+            if books:
+                return [format_book_data(book) for book in books]
 
-    if last_error:
-        return {"error": f"Koha API unavailable or unreachable. Last error: {last_error}"}
-    else:
-        return {"error": "No books found."}
+        except (requests.RequestException, json.JSONDecodeError) as e:
+            logger.error(f"[Koha Search] Error: {e}")
+            return {"error": f"Koha API unreachable: {e}"}
+
+    return {"error": "No books found."}
+
+# -------------------------------
+# Search Specific Book (e.g., ISBN)
+# -------------------------------
+def search_specific_book(
+    field: Literal["isbn", "title", "author"],
+    value: str
+) -> Union[list[dict[str, Any]], dict[str, str]]:
+    """
+    Searches Koha using an exact match on the given field.
+    """
+    headers = get_auth_headers()
+    value = value.strip()
+
+    query = json.dumps({field: value})
+    url = f"{API_URL}?q={query}"
+    logger.info(f"[Koha Specific Search] Final URL: {url}")
+
+    try:
+        response = requests.get(url, headers=headers, timeout=TIMEOUT)
+        response.raise_for_status()
+        books = response.json()
+
+        return [format_book_data(book) for book in books] if books else []
+
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        logger.error(f"[Koha Specific Search] Error: {e}")
+        return {"error": f"Failed to fetch from Koha: {e}"}
+
+# -------------------------------
+# Helpers
+# -------------------------------
+def format_book_data(book: dict[str, Any]) -> dict[str, Any]:
+    """Formats book dictionary from Koha API into standard response schema."""
+    return {
+        "title": book.get("title", "N/A"),
+        "publisher": book.get("publisher", "N/A"),
+        "isbn": book.get("isbn", "N/A"),
+        "quantity": book.get("quantity", "N/A"),
+        "author": book.get("author", "N/A"),
+        "year": book.get("copyright_date", "N/A"),
+        "biblio_id": book.get("biblio_id", "N/A"),
+    }

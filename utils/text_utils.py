@@ -1,124 +1,126 @@
+import re
+import logging
 import spacy
 from rapidfuzz import fuzz
 from rapidfuzz.fuzz import token_sort_ratio
-import logging
+from typing import Optional
 
+# Setup
 logger = logging.getLogger("text_utils")
-
-# Load spaCy English model once to tokenize and process user queries
 nlp = spacy.load("en_core_web_sm")
 
-# --------------------------------------
-# Utility: Replace null or invalid values
-# --------------------------------------
-def replace_null(value):
+# -----------------------
+# Constants
+# -----------------------
+SPECIFIC_BOOK_PHRASES = [
+    "find book", "look for book", "lookup title", "specific book",
+    "find this book", "find the book titled", "lookup the book",
+    "find title", "find the book", "lookup"
+]
+
+RECOMMEND_PHRASES = [
+    "recommend", "suggest", "can you recommend", "book suggestion"
+]
+
+# -----------------------
+# ISBN Extraction
+# -----------------------
+def extract_isbn(text: str) -> Optional[str]:
     """
-    Cleans a given value by checking for null/empty/invalid cases.
-    Returns a standardized placeholder string if invalid.
+    Extracts an ISBN from text with hyphens preserved and appends a period if not present.
+    """
+    pattern = r'\b(?:97[89][-\s]?)?\d{1,5}[-\s]?\d{1,7}[-\s]?\d{1,7}[-\s]?[\dXx]\b'
+    match = re.search(pattern, text)
+    if match:
+        isbn = match.group(0).strip()
+        isbn = re.sub(r'\s+', '-', isbn)  # Normalize spaces to hyphens
+        return isbn if isbn.endswith('.') else f"{isbn}."
+    return None
+
+# -----------------------
+# Null Replacement
+# -----------------------
+def replace_null(value) -> str:
+    """
+    Standardizes missing or null-like values to 'Not Available'.
     """
     if value is None:
         return "Not Available"
     
-    str_val = str(value).strip()
-    if str_val.lower() in {"", "none", "null", "not available"}:
-        return "Not Available"
-    
-    return str_val
+    str_val = str(value).strip().lower()
+    return "Not Available" if str_val in {"", "none", "null", "not available"} else str(value).strip()
 
-# --------------------------------------
-# Utility: Clean query string for processing
-# --------------------------------------
+# -----------------------
+# Query Cleaning
+# -----------------------
 def clean_query_text(query: str) -> str:
     """
-    Uses spaCy to tokenize and remove punctuation.
-    Lowercases all tokens and returns a clean string.
+    Tokenizes and lowercases a query string, removing punctuation.
     """
-    doc = nlp(query)
-    tokens = [token.text.lower() for token in doc if not token.is_punct]
-    return " ".join(tokens)
+    return " ".join(token.text.lower() for token in nlp(query) if not token.is_punct)
 
-# ----------------------------------------------------------------
-# Keyword Detection: Fuzzy match individual tokens with a set
-# ----------------------------------------------------------------
+# -----------------------
+# Token-Level Fuzzy Match
+# -----------------------
 def fuzzy_match_keywords(query_tokens: list[str], keywords: set[str], threshold: int = 90) -> bool:
     """
-    Matches tokens from the user query with target keywords.
-    Uses both exact match and fuzzy partial ratio scoring.
-
-    Parameters:
-        query_tokens: list of individual tokens from the query
-        keywords: set of valid trigger keywords
-        threshold: fuzzy score threshold to qualify as match
-
-    Returns:
-        True if a match is found, else False
+    Checks for both exact and fuzzy token matches in a query against a keyword set.
     """
-    # Remove short or stopword tokens
-    filtered_tokens = [token for token in query_tokens if len(token) > 2 and not nlp(token)[0].is_stop]
+    filtered = [t for t in query_tokens if len(t) > 2 and not nlp(t)[0].is_stop]
 
-    # Check for exact match
-    for token in filtered_tokens:
+    for token in filtered:
         if token in keywords:
             return True
 
-    # Apply fuzzy partial ratio match
-    for token in filtered_tokens:
+    for token in filtered:
         for keyword in keywords:
             score = fuzz.partial_ratio(token, keyword)
-            logger.debug(f"Matching token '{token}' with keyword '{keyword}': Score = {score}")
+            logger.debug(f"Fuzzy match: '{token}' vs '{keyword}' = {score}")
             if score >= threshold:
                 return True
 
     return False
 
-# ----------------------------------------------------------------
-# Fuzzy match full query to target phrases (stricter)
-# ----------------------------------------------------------------
+# -----------------------
+# Full Query Fuzzy Match
+# -----------------------
 def fuzzy_match_text_to_targets(query: str, *targets: str, threshold: int = 75) -> bool:
     """
-    Performs a stricter fuzzy match between the full cleaned query
-    and one or more target phrases, using token_sort_ratio.
-
-    Parameters:
-        query: the user query string
-        targets: one or more string targets to compare with
-        threshold: minimum score to count as match
-
-    Returns:
-        True if match found, False otherwise
+    Compares a query against multiple target phrases using fuzzy token_sort_ratio.
     """
     query_clean = clean_query_text(query)
 
     for target in targets:
         if not target:
             continue
-        target_clean = clean_query_text(target)
-        score = token_sort_ratio(query_clean, target_clean)
-        logger.debug(f"[FuzzyMatch] '{query_clean}' vs '{target_clean}' → Score: {score}")
+        score = token_sort_ratio(query_clean, clean_query_text(target))
+        logger.debug(f"[FuzzyMatch] '{query_clean}' vs '{target}': Score = {score}")
         if score >= threshold:
             return True
 
     return False
 
-# ----------------------------------------------------------------
-# Intent Classification for Book Queries
-# ----------------------------------------------------------------
+# -----------------------
+# Book Intent Classifier
+# -----------------------
 def classify_book_intent(query: str) -> str:
     """
-    Classifies the user's query into one of the following intents:
-    - 'isbn_lookup'
+    Classifies a book-related query into one of:
+    - 'specific_book_search'
     - 'recommend'
-    - 'search' (default fallback)
-
-    Returns:
-        One of: 'isbn_lookup', 'recommend', 'search'
+    - 'search'
     """
-    q = query.lower()
+    query_lower = query.lower()
 
-    if "isbn" in q:
-        return "isbn_lookup"
+    if "isbn" in query_lower or fuzzy_match_text_to_targets(query_lower, *SPECIFIC_BOOK_PHRASES):
+        return "specific_book_search"
 
-    if any(kw in q for kw in ["recommend", "suggest", "can you recommend"]):
+    if any(phrase in query_lower for phrase in RECOMMEND_PHRASES):
         return "recommend"
+
+    if query_lower.startswith(("find", "lookup")):
+        noun_chunks = list(nlp(query).noun_chunks)
+        if noun_chunks and len(noun_chunks[0].text.split()) >= 2:
+            return "specific_book_search"
 
     return "search"
