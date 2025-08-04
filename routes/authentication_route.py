@@ -19,6 +19,7 @@ def get_user_collection(db: AsyncIOMotorDatabase):
     return db["users"]
 
 
+
 # ----------------------- USER LOGIN   -----------------------
 @router.post("/login")
 async def login(cardnumber: CardNumber, password: Password, db = Depends(get_db)):
@@ -33,6 +34,7 @@ async def login(cardnumber: CardNumber, password: Password, db = Depends(get_db)
             JWT_SECRET,
             algorithm="HS256"
         )
+        logger.info(f"User {user['cardnumber']} logged in successfully.")
         return {"token": token, "cardnumber": user["cardnumber"], "username": user["username"]}
     except HTTPException:
         raise
