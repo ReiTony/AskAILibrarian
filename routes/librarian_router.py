@@ -8,7 +8,7 @@ from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
 
 from utils.llm_client import generate_response
-from utils.koha_client import search_books, search_specific_book
+from utils.koha_client import search_books, search_specific_book, fetch_quantity_from_biblio_id
 from utils.sessions import ChatSession, get_chat_session
 from utils.text_utils import (
     replace_null,
@@ -168,7 +168,7 @@ async def search_books_api(request: Request, chat_session: ChatSession = Depends
                 "publisher": replace_null(b.get("publisher")).strip(" ,;:"),
                 "year": replace_null(b.get("year")),
                 "biblio_id": replace_null(b.get("biblio_id")),
-                "quantity_available": 1,
+                "quantity_available": await asyncio.to_thread(fetch_quantity_from_biblio_id, replace_null(b.get("biblio_id"))),
             } for b in result[:5]]
 
             prompt = specific_book_found_prompt(formatted[0]["title"], formatted[0]["isbn"])
@@ -201,6 +201,7 @@ async def search_books_api(request: Request, chat_session: ChatSession = Depends
                         "isbn": replace_null(book.get("isbn")),
                         "publisher": replace_null(book.get("publisher")),
                         "biblio_id": replace_null(book.get("biblio_id")),
+                        "quantity_available": await asyncio.to_thread(fetch_quantity_from_biblio_id, replace_null(book.get("biblio_id"))),
                         "year": replace_null(book.get("year")),
                     }
                     if len(aggregated) >= 10:
@@ -252,7 +253,7 @@ async def search_books_api(request: Request, chat_session: ChatSession = Depends
                     "author": replace_null(book.get("author")).strip(" ,;:"),
                     "isbn": replace_null(book.get("isbn")),
                     "publisher": replace_null(book.get("publisher")).strip(" ,;:"),
-                    "quantity_available": 1,
+                    "quantity_available": await asyncio.to_thread(fetch_quantity_from_biblio_id, replace_null(book.get("biblio_id"))),
                     "year": replace_null(book.get("year")),
                     "biblio_id": replace_null(book.get("biblio_id")),
                 }
