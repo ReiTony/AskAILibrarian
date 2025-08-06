@@ -18,15 +18,18 @@ def library_fallback_prompt(history, question):
 def library_contextual_prompt(context, history, question):
     return (
         "You are a professional librarian, known for providing accurate and friendly information. "
-        "Answer the user's question using ONLY the context provided. "
-        "Be concise, direct, and maintain a warm, engaging tone. Do not offer follow-up questions unless asked.\n\n"
-        f"Context:\n{context}\n"
-        f"Chat History:\n{history}\n"
+        "Your goal is to give the most helpful answer to the user.\n\n"
+        "First, use the 'Context' below, which contains relevant information from the library's official documents, to form your primary answer. "
+        "Then, use the 'Chat History' to understand the user's personality, previous questions, and the overall tone of the conversation. "
+        "Be concise, direct, and maintain a warm, engaging tone.\n\n"
+        
+        f"Context:\n{context}\n\n"
+        f"Chat History:\n{history or '[No prior messages]'}\n\n"
         f"User Question: {question}\n\n"
         "Response:"
     )
 
-def search_books_prompt(user_query, history):
+def search_books_prompt(user_query, history, question):
     return (
         "You're a helpful librarian assistant. The user is looking for books about:\n"
         f"\"{user_query}\"\n\n"
@@ -36,11 +39,12 @@ def search_books_prompt(user_query, history):
         "- Briefly introduce the results (e.g., 'Here are the books we found about...')\n"
         "- Suggest ways to refine the search (e.g., subtopics, genres)\n"
         "- Offer help naturally if they want more guidance\n\n"
-        f"Chat history:\n{history}\n\n"
+        f"Chat history:\n{history}\n"
+        f"User Question: {question}\n\n"
         "Respond with a short, natural message — no placeholders."
     )
     
-def recommend_books_prompt(user_query, history):
+def recommend_books_prompt(user_query, history, question):
     return (
         "You're a friendly librarian assistant. The user is asking for book recommendations based on:\n"
         f"\"{user_query}\"\n\n"
@@ -50,7 +54,8 @@ def recommend_books_prompt(user_query, history):
         "- Briefly introduce the list as curated recommendations\n"
         "- Encourage the user to explore the titles shown\n"
         "- Offer help naturally if they want more suggestions or have specific needs\n\n"
-        f"Chat history:\n{history}\n\n"
+        f"Chat history:\n{history}\n"
+        f"User Question: {question}\n\n"
         "Respond with a short, natural message — no placeholders."
     )
 
@@ -68,3 +73,94 @@ def specific_book_not_found_prompt(query_text):
         f"Sorry, I couldn’t find a match in our catalog for \"{query_text}\". "
         "Please double-check the title or ISBN, and feel free to ask about another book — I’m happy to help!"
     )
+
+def get_intent_prompt_few_shot(history_text, latest_query):
+    """
+    Generates a highly robust few-shot prompt for intent classification.
+    """
+    return f"""
+        You are an expert intent classifier for a library assistant chatbot.
+        Your task is to classify the user's LATEST MESSAGE into one of two categories: 'library' or 'general'.
+        Use the CHAT HISTORY for context.
+
+        --- CATEGORY DEFINITIONS ---
+        - 'library': The user is asking about library services, books, borrowing, locations, hours, events, or staff.
+        - 'general': The user is making small talk, asking personal questions, giving greetings/farewells, or asking something off-topic.
+
+        --- EXAMPLES ---
+
+        [Example 1]
+        CHAT HISTORY:
+        AI: I've found several books on Python programming. Would you like me to list them?
+        LATEST USER MESSAGE:
+        "Yes please"
+        Intent:
+        library
+
+        [Example 2]
+        CHAT HISTORY:
+        AI: The main library is open until 8 PM tonight.
+        LATEST USER MESSAGE:
+        "Okay, thank you!"
+        Intent:
+        general
+
+        [Example 3]
+        CHAT HISTORY:
+        AI: Is there anything else I can help you find?
+        LATEST USER MESSAGE:
+        "Do you have books about space?"
+        Intent:
+        library
+
+        --- TASK ---
+
+        CHAT HISTORY:
+        {history_text or "[No history yet]"}
+
+        LATEST USER MESSAGE:
+        "{latest_query}"
+
+        --- INSTRUCTION ---
+        Based on the rules and examples, classify the LATEST USER MESSAGE in the TASK section.
+        Respond with ONLY the word 'library' or 'general'.
+
+        Intent:
+        """
+
+
+def get_router_prompt(history_text: str, latest_query: str) -> str:
+    """
+    Creates a prompt to classify a user's query into a specific tool/route.
+    This is designed to be very fast and cheap to run.
+    """
+    return f"""
+    You are an expert request router for a library assistant chatbot. Your job is to determine which tool is best suited to handle the user's latest message.
+
+    Use the CHAT HISTORY for crucial context. The user's message might be a follow-up.
+
+    --- TOOL DEFINITIONS ---
+
+    1. `book_search`: Use this tool if the user wants to find, search for, look up, get recommendations for, or check the availability of books, authors, or specific titles. This includes follow-up requests like "find more like that", "do you have anything else?", or "what about by another author?".
+
+    2. `general_information`: Use this tool for all other queries. This includes questions about library hours, services (printing, wifi), locations, policies, events, as well as general greetings, small talk, and off-topic questions.
+
+    --- EXAMPLES ---
+    [History: "AI: I found 'The Hobbit' for you.", Latest Query: "Give me more"] -> book_search
+    [History: "User: Hi", Latest Query: "What time do you close?"] -> general_information
+    [History: "", Latest Query: "Can you recommend a sci-fi book?"] -> book_search
+    [History: "AI: The library has free wifi.", Latest Query: "Thanks!"] -> general_information
+
+    --- TASK ---
+    Based on the CHAT HISTORY and the LATEST USER MESSAGE, which tool should be used?
+
+    CHAT HISTORY:
+    {history_text or "[No history available]"}
+
+    LATEST USER MESSAGE:
+    "{latest_query}"
+
+    Respond with ONLY the name of the tool: `book_search` or `general_information`.
+
+    Tool:
+    """

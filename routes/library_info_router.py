@@ -1,18 +1,21 @@
 import logging
 import re
-
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
-from utils.sessions import ChatSession, get_chat_session
+from motor.motor_asyncio import AsyncIOMotorDatabase
+
+from utils.sessions import get_session_and_user_data    
 from utils.chroma_client import web_db
 from utils.suggestions import get_suggestions, default_reminders
 from utils.llm_client import generate_response
-from utils.prompt_templates import library_fallback_prompt, library_contextual_prompt
+from utils.prompt_templates import library_fallback_prompt, get_intent_prompt_few_shot
 from utils.language_translator import (
     detect_language,
     translate_to_english,
     translate_to_user_language,
 )
+from utils.chat_retention import get_retained_history, save_conversation_turn
+from db.connection import get_db
 
 router = APIRouter()
 logger = logging.getLogger("library_info_route")
@@ -32,6 +35,7 @@ STOPWORDS = {
     "tell", "need", "show", "am", "required", "requirements", "card", "way", "would", "like",
 }
 
+# --- Utility Functions (No Changes) ---
 def simplify_query(query):
     q = query.lower()
     q = re.sub(r"[^\w\s]", "", q)
@@ -56,182 +60,102 @@ def format_response(answer: str, suggestions: list) -> dict:
         response[f"{prefix}{i}"] = suggestion
     return response
 
+# --- Main API Route (Refactored) ---
 @router.post("/library_info")
 async def library_info(
-    request: Request,
-    chat_session: ChatSession = Depends(get_chat_session)
+    session_data: tuple = Depends(get_session_and_user_data),
+    db: AsyncIOMotorDatabase = Depends(get_db)
 ):
     try:
-        data = await request.json()
+        # --- 1. SETUP AND DATA GATHERING ---
+        chat_session, cardnumber, data = session_data
         user_query = data.get("query", "")
+        cardnumber = data.get("cardNumber") or getattr(chat_session, 'cardNumber', None) #Huwag alisin. For CardNumber compatibility
 
         if not isinstance(user_query, str) or not user_query.strip():
             return JSONResponse(content={"error": "Query is required."}, status_code=422)
+        
+        logger.info(f"Processing library_info for cardnumber: '{cardnumber}'")
 
         user_lang = detect_language(user_query)
         translated_query = await translate_to_english(user_query, user_lang)
+        
+        retained_history = await get_retained_history(db, cardnumber)   
+        session_history = await chat_session.get_history()
+        history_for_router = session_history[-4:]
+        history_text = "\n".join(f"{'Human' if msg['role'] == 'user' else 'AI'}: {msg['content']}" for msg in (retained_history + history_for_router))
 
+        logger.info(f"History for '{cardnumber}' built. Total messages for context: {len(history_text)}")
+
+        # --- 2. RESPONSE GENERATION ---
+        # Initialize variables that will be populated by the logic below
+        bot_response = ""
+        suggestions = default_reminders
+
+        contextPrompt = library_fallback_prompt(history_text, translated_query)
+
+        # Intent detection
         try:
-            history = await chat_session.get_history()
-        except Exception as e:
-            logger.error(f"Chat session history error: {e}")
-            history = []
-
-        history_text = "\n".join([
-            f"{'Human' if msg['role'] == 'user' else 'AI'}: {msg['content']}"
-            for msg in history
-        ])
-
-        intent_prompt = (
-            "Classify the user's intent.\n\n"
-            "If the question is related to library services (like books, borrowing, locations, library staff, etc.), reply with: library\n"
-            "If the question is general, personal, or off-topic (like greetings, languages, preferences, abilities), reply with: general\n\n"
-            f"User Question: {translated_query}\n"
-            "Intent:"
-        )
-        try:
-            intent_response = await generate_response(intent_prompt)
-            intent = intent_response.strip().lower()
+            intent_response = get_intent_prompt_few_shot(history_text, translated_query)
+            llmResponse = await generate_response(intent_response)
+            logger.info(f"\n\n[Intent Detection] Raw intent response: {intent_response}\n\n")
+            intent = llmResponse.strip().lower()
             logger.info(f"[Intent Detection] Query: '{translated_query}' → Intent: {intent}")
         except Exception as e:
-            logger.warning(f"Intent detection failed: {e}")
+            logger.warning(f"Intent detection failed, defaulting to 'library': {e}")
             intent = "library"
 
         if intent == "general":
-            prompt = library_fallback_prompt(history_text, translated_query)
+            prompt = contextPrompt
+            logger.info(f"\n======Prompt for general intent:======== {prompt}\n\n")
+            bot_response = await generate_response(prompt)
+            # 'suggestions' will remain as the default_reminders
+
+        else:  # This block handles intent == "library" or any fallback
             try:
+                simple_query = simplify_query(translated_query)
+                results = web_db.similarity_search(simple_query or translated_query, k=3)
+                
+                if not results:
+                    prompt = contextPrompt
+                    logger.info(f"\n======Prompt for general intent:======== {prompt}\n\n")
+                else:
+                    context = "\n---\n".join([doc.page_content for doc in results])
+                    prompt = contextPrompt
+                    logger.info(f"\n======Prompt for general intent:======== {prompt}\n\n")
+                
                 bot_response = await generate_response(prompt)
+                suggestions = get_suggestions(translated_query, []) # Get fresh suggestions
             except Exception as e:
-                logger.error(f"LLM fallback error: {e}")
-                bot_response = "Sorry, I couldn't respond at the moment."
+                logger.error(f"Error during library response generation: {e}", exc_info=True)
+                bot_response = "Sorry, I encountered an error while looking for that information."
 
-            translated_response = await translate_to_user_language(bot_response, user_lang)
-            response_content = format_response(translated_response, default_reminders)
+        # --- 3. FINALIZATION, SAVING, AND RETURN (CONVERGENCE POINT) ---
 
-            try:
-                await chat_session.add_message("user", user_query)
-                await chat_session.add_message("assistant", translated_response)
-            except Exception as e:
-                logger.error(f"Chat session log error: {e}")
-
-            response_content["history"] = await chat_session.get_history()
-            return JSONResponse(content=response_content, status_code=200)
-
-
-        try:
-            simple_query = simplify_query(translated_query)
-            results_original = web_db.similarity_search_with_score(translated_query, k=5)
-            results_simple = web_db.similarity_search_with_score(simple_query, k=5) if simple_query != translated_query else []
-            best_results = results_original
-            if results_simple:
-                top_score_original = max([score for _, score in results_original], default=0)
-                top_score_simple = max([score for _, score in results_simple], default=0)
-                if top_score_simple > top_score_original:
-                    best_results = results_simple
-            results = best_results
-        except Exception as e:
-            logger.error(f"Chroma similarity search error: {e}")
-            results = []
-
-        query_keywords = [word.lower() for word in translated_query.split() if len(word) > 3]
-        matching_locations = detect_locations(translated_query)
-        prioritized_results = []
-        for doc, score in results:
-            content = doc.page_content.lower()
-            match_count = sum(keyword in content for keyword in query_keywords)
-            prioritized_results.append((doc, match_count, score))
-
-        try:
-            suggestions = get_suggestions(translated_query, query_keywords)
-        except Exception as e:
-            logger.error(f"Suggestion generation error: {e}")
-            suggestions = default_reminders
-
-        try:
-            if len(matching_locations) > 1:
-                clarification_msg = (
-                    f"Your question could refer to multiple locations. "
-                    f"Did you mean: {', '.join(matching_locations)}? "
-                    "Please specify which library or division you are asking about."
-                )
-                bot_response = clarification_msg
-
-            elif len(matching_locations) == 1:
-                location = matching_locations[0].lower()
-                filtered = [
-                    (doc, mc, sc)
-                    for (doc, mc, sc) in prioritized_results
-                    if location in doc.page_content.lower()
-                ]
-                prioritized_results = filtered or prioritized_results
-                prioritized_results.sort(key=lambda x: (-x[1], x[2]))
-                if prioritized_results:
-                    top_doc = prioritized_results[0][0]
-                    context = f"{top_doc.metadata.get('main_section', 'General')}: {top_doc.page_content}"
-                    prompt = library_contextual_prompt(context, history_text, translated_query)
-                    try:
-                        bot_response = await generate_response(prompt)
-                    except Exception as e:
-                        logger.error(f"LLM response error: {e}")
-                        bot_response = "Sorry, I could not generate an answer right now."
-                else:
-                    prompt = library_fallback_prompt(history_text, translated_query)
-                    try:
-                        bot_response = await generate_response(prompt)
-                    except Exception as e:
-                        logger.error(f"LLM fallback error: {e}")
-                        bot_response = "Sorry, I could not generate an answer right now."
-            else:
-                filtered = [
-                    (doc, mc, sc)
-                    for (doc, mc, sc) in prioritized_results
-                    if "university library" in doc.page_content.lower()
-                ]
-                prioritized_results = filtered or prioritized_results
-                prioritized_results.sort(key=lambda x: (-x[1], x[2]))
-                if prioritized_results:
-                    top_doc = prioritized_results[0][0]
-                    context = f"{top_doc.metadata.get('main_section', 'General')}: {top_doc.page_content}"
-                    prompt = library_contextual_prompt(context, history_text, translated_query)
-                    try:
-                        bot_response = await generate_response(prompt)
-                    except Exception as e:
-                        logger.error(f"LLM response error: {e}")
-                        bot_response = "Sorry, I could not generate an answer right now."
-                else:
-                    prompt = library_fallback_prompt(history_text, translated_query)
-                    try:
-                        bot_response = await generate_response(prompt)
-                    except Exception as e:
-                        logger.error(f"LLM fallback error: {e}")
-                        bot_response = "Sorry, I could not generate an answer right now."
-
-        except Exception as e:
-            logger.error(f"Response formatting error: {e}")
-            return JSONResponse(
-                content={"error": "Internal server error."},
-                status_code=500
-            )
-
+        # Translate the final AI response back to the user's language
         translated_response = await translate_to_user_language(bot_response, user_lang)
-        response_content = format_response(translated_response, suggestions)
 
+        # Save the full conversation turn to ALL storage locations
         try:
+            # Save to short-term session memory
             await chat_session.add_message("user", user_query)
-        except Exception as e:
-            logger.error(f"Chat session add_message (user) error: {e}")
-        try:
             await chat_session.add_message("assistant", translated_response)
+            
+            # Save to long-term retention database
+            await save_conversation_turn(db, cardnumber, user_query, translated_response)
+            logger.info(f"[Chat Retention] Saved library_info turn for {cardnumber}")
         except Exception as e:
-            logger.error(f"Chat session add_message (assistant) error: {e}")
+            logger.error(f"Failed to save chat history for {cardnumber}: {e}")
 
-        history = await chat_session.get_history()
-        response_content["history"] = history
+        # Format the final JSON response for the frontend
+        response_content = format_response(translated_response, suggestions)
+        response_content["history"] = await chat_session.get_history()
+        
         return JSONResponse(content=response_content, status_code=200)
 
     except Exception as e:
-        logger.error(f"Library info endpoint failed: {e}")
+        logger.error(f"Library info endpoint failed catastrophically: {e}", exc_info=True)
         return JSONResponse(
-            content={"error": "Internal server error."},
+            content={"error": "A critical internal server error occurred."},
             status_code=500
         )

@@ -5,12 +5,18 @@ from decouple import config
 from prometheus_fastapi_instrumentator import Instrumentator
 from contextlib import asynccontextmanager
 import uvicorn
+from logging.config import dictConfig  
+
+from logging_config import LOGGING_CONFIG
 
 # ---- Global Logging Config (one place only) ----
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 )
+
+dictConfig(LOGGING_CONFIG)
+print("--- LOGGING CONFIGURATION APPLIED ---")
 
 # App Imports
 from routes.authentication_route import router as auth_router

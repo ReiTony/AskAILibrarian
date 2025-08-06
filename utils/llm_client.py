@@ -2,7 +2,7 @@ import httpx
 from decouple import config
 import logging
 
-OPENROUTER_API_KEY = config("OPENROUTER_API_KEY2")  
+OPENROUTER_API_KEY = config("OPENROUTER_API_KEY4")  
 SITE_URL = config("SITE_URL", default="http://localhost")
 SITE_TITLE = config("SITE_TITLE", default="Librarian Chatbot")
 

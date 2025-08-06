@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from utils.llm_client import generate_response
 from utils.koha_client import search_books, search_specific_book
-from utils.sessions import ChatSession, get_chat_session
+from utils.sessions import get_session_and_user_data
 from utils.text_utils import (
     replace_null,
     clean_query_text,
@@ -23,6 +23,11 @@ from utils.prompt_templates import (
     specific_book_not_found_prompt,
     recommend_books_prompt,
 )
+
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from utils.chat_retention import get_retained_history, save_conversation_turn # <-- NEW
+from db.connection import get_db
+from utils.koha_client import search_books, search_specific_book, fetch_quantity_from_biblio_id
 
 router = APIRouter()
 logger = logging.getLogger("search_books_api")
@@ -126,13 +131,48 @@ async def koha_multi_search(keywords: list[str]) -> list[dict]:
         return [{"answer": "Library database is currently unavailable or returned no results."}]
     return books
 
+async def fetch_and_add_quantities(books: list[dict]) -> list[dict]:
+    """
+    Fetches quantities for a list of books in parallel and adds the 'quantity_available' key.
+    """
+    if not books:
+        return []
+
+    # Create a list of tasks to run concurrently
+    tasks = [
+        asyncio.to_thread(fetch_quantity_from_biblio_id, book.get("biblio_id"))
+        for book in books if book.get("biblio_id")
+    ]
+    
+    # Run all tasks in parallel
+    quantities = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Map the fetched quantities back to the books
+    for i, book in enumerate(books):
+        biblio_id = book.get("biblio_id")
+        if biblio_id:
+            quantity_result = quantities[i]
+            if isinstance(quantity_result, Exception):
+                logger.error(f"Failed to fetch quantity for biblio_id {biblio_id}: {quantity_result}")
+                book["quantity_available"] = "Error"
+            else:
+                book["quantity_available"] = quantity_result
+        else:
+            book["quantity_available"] = "N/A" # Or 0, or some other default
+
+    return books
+
 
 # ---------- Main API Route ----------
 @router.post("/search_books")
-async def search_books_api(request: Request, chat_session: ChatSession = Depends(get_chat_session)):
+async def search_books_api(
+    session_data: tuple = Depends(get_session_and_user_data),
+    db: AsyncIOMotorDatabase = Depends(get_db)
+):
     try:
-        data = await request.json()
+        chat_session, cardnumber, data = session_data
         user_query = data.get("query", "").strip()
+        cardnumber = data.get("cardNumber") or getattr(chat_session, 'cardNumber', None)#Huwag alisin. For CardNumber compatibility
         if not user_query:
             return JSONResponse(content={"error": "Query parameter is required"}, status_code=400)
 
@@ -141,143 +181,108 @@ async def search_books_api(request: Request, chat_session: ChatSession = Depends
         logger.info(f"[Intent] Detected: {intent}")
 
         try:
-            history = await chat_session.get_history()
+            # Get long-term history from our new utility
+            retained_history = await get_retained_history(db, cardnumber)
+            # Get short-term (current session) history
+            session_history = await chat_session.get_history()
+            # Combine them for full context. Retained history comes first.
+            full_history = retained_history + session_history
         except Exception as e:
-            logger.warning(f"Failed to fetch chat history: {e}")
-            history = []
-
-        history_text = "\n".join(f"{'Human' if msg['role'] == 'user' else 'AI'}: {msg['content']}" for msg in history)
+            logger.warning(f"Failed to fetch or combine chat history: {e}")
+            full_history = []
+        
+        # Use the combined history for the LLM prompt
+        history_text = "\n".join(f"{'Human' if msg['role'] == 'user' else 'AI'}: {msg['content']}" for msg in full_history)
 
         # ---------- INTENT: Specific Book ----------
         if intent == "specific_book_search":
+            logger.info("Executing path: specific_book_search")
             isbn = extract_isbn(user_query)
-            logger.info(f"[Specific Book Search] ISBN: {isbn}")
             result = await asyncio.to_thread(search_specific_book, "isbn", isbn)
 
             if not result or (isinstance(result, dict) and "error" in result):
-                return JSONResponse(content={"response": [{
-                    "type": "specific_book_search",
-                    "answer": specific_book_not_found_prompt(isbn),
-                    "books": [],
-                }]}, status_code=200)
-
-            formatted = [{
-                "title": replace_null(b.get("title")).strip(" ,;:"),
-                "author": replace_null(b.get("author")).strip(" ,;:"),
-                "isbn": replace_null(b.get("isbn")),
-                "publisher": replace_null(b.get("publisher")).strip(" ,;:"),
-                "year": replace_null(b.get("year")),
-                "biblio_id": replace_null(b.get("biblio_id")),
-                "quantity_available": 1,
-            } for b in result[:5]]
-
-            prompt = specific_book_found_prompt(formatted[0]["title"], formatted[0]["isbn"])
-            bot_response = await generate_response(prompt)
-            await chat_session.add_message("user", user_query)
-            await chat_session.add_message("assistant", bot_response)
-
-            return JSONResponse(content={"response": [{
-                "type": "specific_book_search",
-                "answer": bot_response,
-                "books": formatted
-            }]}, status_code=200)
+                bot_response = specific_book_not_found_prompt(isbn)
+            else:
+                formatted_books = [{"title": replace_null(b.get("title")).strip(" ,;:"), "author": replace_null(b.get("author")).strip(" ,;:"), "isbn": replace_null(b.get("isbn")), "publisher": replace_null(b.get("publisher")).strip(" ,;:"), "year": replace_null(b.get("year")), "biblio_id": replace_null(b.get("biblio_id"))} for b in result[:5]]
+                books_with_quantities = await fetch_and_add_quantities(formatted_books)
+            
+                bot_response = specific_book_found_prompt(books_with_quantities[0]["title"], books_with_quantities[0]["isbn"])
+            await save_conversation_turn(db, cardnumber, user_query, bot_response)
+            return JSONResponse(content={"response": [{"type": "specific_book_search", "answer": bot_response, "books": books_with_quantities}]}, status_code=200)
 
         # ---------- INTENT: Recommendations ----------
         elif intent == "recommend":
+            logger.info("Executing path: recommend")
             keywords = await expand_query(query_clean)
-            logger.info(f"[Recommend] Expanded: {keywords}")
             raw_results = await koha_multi_search(keywords)
 
-            if not raw_results or "answer" in raw_results[0]:
-                return JSONResponse(content={"answer": raw_results[0]["answer"]}, status_code=200)
-
+            if not raw_results or ("answer" in raw_results[0] and len(raw_results) == 1):
+                bot_response = raw_results[0].get("answer", f"I couldn't find any books to recommend for '{user_query}'.")
+                await save_conversation_turn(db, cardnumber, user_query, bot_response)
+                return JSONResponse(content={"answer": bot_response}, status_code=200)
+            
+            # Process results...
             aggregated = {}
             for book in raw_results:
                 key = f"{replace_null(book.get('title'))}|{replace_null(book.get('author'))}"
                 if key not in aggregated and "Not Available" not in key:
-                    aggregated[key] = {
-                        "title": replace_null(book.get("title")),
-                        "author": replace_null(book.get("author")),
-                        "isbn": replace_null(book.get("isbn")),
-                        "publisher": replace_null(book.get("publisher")),
-                        "biblio_id": replace_null(book.get("biblio_id")),
-                        "year": replace_null(book.get("year")),
-                    }
-                    if len(aggregated) >= 10:
+                    aggregated[key] = {"title": replace_null(book.get("title")), "author": replace_null(book.get("author")), "isbn": replace_null(book.get("isbn")), "publisher": replace_null(book.get("publisher")), "biblio_id": replace_null(book.get("biblio_id")), "year": replace_null(book.get("year"))}
+                    if len(aggregated) >= 15: # Limit the number of books before fetching quantities
                         break
-
-            books = list(aggregated.values())
-            prompt = recommend_books_prompt(query_clean, history_text)
-            try:
-                bot_response = await generate_response(prompt)
-            except Exception as e:
-                logger.error(f"LLM error: {e}")
-                bot_response = "Here are some recommended books based on your topic."
-
-            await chat_session.add_message("user", user_query)
-            await chat_session.add_message("assistant", bot_response)
-
-            return JSONResponse(content={"response": [{
-                "type": "recommendation",
-                "answer": bot_response,
-                "books": books
-            }]}, status_code=200)
-
-        # ---------- INTENT: General Search ----------
-        if not fuzzy_match_keywords(query_clean.split(), SEARCH_BOOKS_KEYWORDS, threshold=75):
-            return JSONResponse(content={"error": "Query does not contain valid search keywords."}, status_code=400)
-
-        keywords = await expand_query(user_query)
-        logger.info(f"[Search] Expanded: {keywords}")
-        cache_key = _agg_key(keywords)
-
-        with AGG_LOCK:
-            cached_books = AGG_CACHE.get(cache_key)
-        if cached_books:
-            logger.info(f"[Search] Served from cache: {len(cached_books)}")
-            books = cached_books
-        else:
-            raw_results = await koha_multi_search(keywords)
-            if not raw_results or "answer" in raw_results[0]:
-                return JSONResponse(content={"answer": raw_results[0]["answer"]}, status_code=200)
-
-            books, seen = {}, set()
-            for book in raw_results:
-                title = replace_null(book.get("title"))
-                if title in seen or title == "Not Available":
-                    continue
-                key = replace_null(book.get("isbn")) or f"{title}|{replace_null(book.get('author'))}"
-                books[key] = {
-                    "title": title.strip(" ,;:"),
-                    "author": replace_null(book.get("author")).strip(" ,;:"),
-                    "isbn": replace_null(book.get("isbn")),
-                    "publisher": replace_null(book.get("publisher")).strip(" ,;:"),
-                    "quantity_available": 1,
-                    "year": replace_null(book.get("year")),
-                    "biblio_id": replace_null(book.get("biblio_id")),
-                }
-                seen.add(title)
-
-            formatted_books = list(books.values())
-            with AGG_LOCK:
-                AGG_CACHE[cache_key] = formatted_books
-
-        prompt = search_books_prompt(query_clean, history_text)
-        try:
+            
+            books_without_quantities = list(aggregated.values())
+            
+            # Now fetch quantities for the aggregated list in parallel
+            books_with_quantities = await fetch_and_add_quantities(books_without_quantities)
+            
+            # DEFINE PROMPT and call LLM
+            prompt = recommend_books_prompt(query_clean, history_text, user_query)
             bot_response = await generate_response(prompt)
-        except Exception as e:
-            logger.error(f"LLM error: {e}")
-            bot_response = "Here are the books I found that match your search."
 
-        await chat_session.add_message("user", user_query)
-        await chat_session.add_message("assistant", bot_response)
+            logger.info(f"=======Recieved Prompt========: \n{prompt}\n\n")
 
-        return JSONResponse(content={"response": [{
-            "type": "booksearch",
-            "answer": bot_response,
-            "books": formatted_books,
-        }]}, status_code=200)
+            await save_conversation_turn(db, cardnumber, user_query, bot_response)
+            return JSONResponse(content={"response": [{"type": "recommendation", "answer": bot_response, "books": books_with_quantities}]}, status_code=200)
 
+        # ---------- INTENT: Search ----------
+        elif intent == "search":
+            logger.info("Executing path: search")
+            keywords = await expand_query(query_clean)
+            raw_results = await koha_multi_search(keywords)
+
+            if not raw_results or ("answer" in raw_results[0] and len(raw_results) == 1):
+                bot_response = raw_results[0].get("answer", f"I couldn't find any books for '{user_query}'.")
+                await save_conversation_turn(db, cardnumber, user_query, bot_response)
+                return JSONResponse(content={"answer": bot_response}, status_code=200)
+
+            # Process results...
+            aggregated = {}
+            for book in raw_results:
+                key = f"{replace_null(book.get('title'))}|{replace_null(book.get('author'))}"
+                if key not in aggregated and "Not Available" not in key:
+                    aggregated[key] = {"title": replace_null(book.get("title")), "author": replace_null(book.get("author")), "isbn": replace_null(book.get("isbn")), "publisher": replace_null(book.get("publisher")), "biblio_id": replace_null(book.get("biblio_id")), "year": replace_null(book.get("year"))}
+                    if len(aggregated) >= 15: # Limit the number of books before fetching quantities
+                        break
+            
+            books_without_quantities = list(aggregated.values())
+            
+            # Now fetch quantities for the aggregated list in parallel
+            books_with_quantities = await fetch_and_add_quantities(books_without_quantities)
+
+            # DEFINE PROMPT and call LLM
+            prompt = search_books_prompt(query_clean, history_text, user_query)
+            bot_response = await generate_response(prompt)
+
+            logger.info(f"=======Recieved Prompt========: \n{prompt}\n\n")
+            
+            await save_conversation_turn(db, cardnumber, user_query, bot_response)
+            return JSONResponse(content={"response": [{"type": "booksearch", "answer": bot_response, "books": books_with_quantities}]}, status_code=200)
+        
+        else: 
+            logger.warning(f"Query did not match any specific route. Intent: '{intent}'. Falling back.")
+            # You can either return an error or route to the general library_info
+            return JSONResponse(content={"error": "I'm not sure how to handle that request. Please try rephrasing, for example 'find books about...'"}, status_code=400)
+    
     except Exception as e:
         logger.error(f"[Search Books] Unhandled error: {e}")
         return JSONResponse(content={"error": "Internal server error."}, status_code=500)
