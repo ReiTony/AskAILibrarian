@@ -41,8 +41,7 @@ async def query_router(
         logger.info(f"Tokens (EN): {tokens}")
 
         recent_history = await chat_session.get_history() 
-        history_for_router = recent_history[-4:] 
-        history_text = "\n".join(f"{'Human' if msg['role'] == 'user' else 'AI'}: {msg['content']}" for msg in history_for_router)
+        history_text = "\n".join(f"{'Human' if msg['role'] == 'user' else 'AI'}: {msg['content']}" for msg in recent_history)
         router_prompt = get_router_prompt(history_text, user_query)
 
         logger.info(f"=====Router Prompt for LLM=====\n{router_prompt}\n==========================")
