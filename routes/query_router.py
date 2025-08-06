@@ -7,6 +7,7 @@ from utils.sessions import get_session_and_user_data
 from routes.librarian_router import search_books_api  
 from routes.library_info_router import library_info
 from utils.prompt_templates import get_router_prompt
+from utils.chat_retention import get_retained_history
 from utils.llm_client import generate_response
 from utils.language_translator import detect_language, translate_to_english
 from db.connection import get_db
@@ -23,6 +24,7 @@ async def query_router(
     try:
         chat_session, cardnumber, data = session_data
         user_query = data.get("query", "").strip()
+        cardnumber = data.get("cardNumber") or getattr(chat_session, 'cardNumber', None)
         logger.info(f"Routing query for cardnumber '{cardnumber}': '{user_query} : {chat_session.session_id}'")
 
         if not user_query:
@@ -40,8 +42,10 @@ async def query_router(
         tokens = translated_query.lower().split()
         logger.info(f"Tokens (EN): {tokens}")
 
+        retained_history = await get_retained_history(db, cardnumber)
         recent_history = await chat_session.get_history() 
-        history_text = "\n".join(f"{'Human' if msg['role'] == 'user' else 'AI'}: {msg['content']}" for msg in recent_history)
+        full_history = retained_history + recent_history
+        history_text = "\n".join(f"{'Human' if msg['role'] == 'user' else 'AI'}: {msg['content']}" for msg in full_history[-4:])
         router_prompt = get_router_prompt(history_text, user_query)
 
         logger.info(f"=====Router Prompt for LLM=====\n{router_prompt}\n==========================")
