@@ -115,9 +115,13 @@ async def fetch_and_add_quantities(books: list[dict]) -> list[dict]:
         for book in books if book.get("biblio_id")
     ]
     quantities = await asyncio.gather(*tasks, return_exceptions=True)
+    cleaned_books = []
     for i, book in enumerate(books):
-        book["quantity_available"] = quantities[i] if not isinstance(quantities[i], Exception) else "Error"
-    return books
+        q = quantities[i] if not isinstance(quantities[i], Exception) else 0
+        if isinstance(q, int) and q > 0:
+            book["quantity_available"] = q
+            cleaned_books.append(book)
+    return cleaned_books
 
 
 # ---------- Main Route ----------
