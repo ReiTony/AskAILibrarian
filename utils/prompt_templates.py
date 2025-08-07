@@ -18,15 +18,18 @@ def library_fallback_prompt(history, question):
 def library_contextual_prompt(context, history, question):
     return (
         "You are a professional librarian, known for providing accurate and friendly information. "
-        "Answer the user's question using ONLY the context provided. "
-        "Be concise, direct, and maintain a warm, engaging tone. Do not offer follow-up questions unless asked.\n\n"
-        f"Context:\n{context}\n"
-        f"Chat History:\n{history}\n"
+        "Your goal is to give the most helpful answer to the user.\n\n"
+        "First, use the 'Context' below, which contains relevant information from the library's official documents, to form your primary answer. "
+        "Then, use the 'Chat History' to understand the user's personality, previous questions, and the overall tone of the conversation. "
+        "Be concise, direct, and maintain a warm, engaging tone.\n\n"
+        
+        f"Context:\n{context}\n\n"
+        f"Chat History:\n{history or '[No prior messages]'}\n\n"
         f"User Question: {question}\n\n"
         "Response:"
     )
 
-def search_books_prompt(user_query, history):
+def search_books_prompt(user_query, history, question):
     return (
         "You're a helpful librarian assistant. The user is looking for books about:\n"
         f"\"{user_query}\"\n\n"
@@ -36,11 +39,12 @@ def search_books_prompt(user_query, history):
         "- Briefly introduce the results (e.g., 'Here are the books we found about...')\n"
         "- Suggest ways to refine the search (e.g., subtopics, genres)\n"
         "- Offer help naturally if they want more guidance\n\n"
-        f"Chat history:\n{history}\n\n"
+        f"Chat history:\n{history}\n"
+        f"User Question: {question}\n\n"
         "Respond with a short, natural message — no placeholders."
     )
     
-def recommend_books_prompt(user_query, history):
+def recommend_books_prompt(user_query, history, question):
     return (
         "You're a friendly librarian assistant. The user is asking for book recommendations based on:\n"
         f"\"{user_query}\"\n\n"
@@ -50,7 +54,8 @@ def recommend_books_prompt(user_query, history):
         "- Briefly introduce the list as curated recommendations\n"
         "- Encourage the user to explore the titles shown\n"
         "- Offer help naturally if they want more suggestions or have specific needs\n\n"
-        f"Chat history:\n{history}\n\n"
+        f"Chat history:\n{history}\n"
+        f"User Question: {question}\n\n"
         "Respond with a short, natural message — no placeholders."
     )
 
@@ -68,3 +73,5 @@ def specific_book_not_found_prompt(query_text):
         f"Sorry, I couldn’t find a match in our catalog for \"{query_text}\". "
         "Please double-check the title or ISBN, and feel free to ask about another book — I’m happy to help!"
     )
+
+
