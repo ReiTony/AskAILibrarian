@@ -11,7 +11,7 @@ from decouple import config
 API_URL = config("KOHA_API")
 USERNAME = config("KOHA_USERNAME")
 PASSWORD = config("KOHA_PASSWORD")
-TIMEOUT = 6  # seconds
+TIMEOUT = 10  # seconds
 
 logger = logging.getLogger("koha_client")
 
