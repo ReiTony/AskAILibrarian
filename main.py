@@ -15,8 +15,8 @@ logging.basicConfig(
 # App Imports
 from routes.authentication_route import router as auth_router
 from routes.chat_route import router as chat_router
-from routes.library_info_router import router as library_info_router
-from routes.librarian_router import router as search_books_router
+from routes.library_info_route import router as library_info_route
+from routes.librarian_route import router as search_books_router
 from routes.query_router import router as query_router
 from utils.chroma._chroma_init import initialize_chroma
 
@@ -48,7 +48,7 @@ Instrumentator().instrument(app).expose(app)
 # Routers
 app.include_router(auth_router, prefix="/api/auth", tags=["User Authentication"])
 app.include_router(chat_router, prefix="/api/chat", tags=["Chatbot"])
-app.include_router(library_info_router, prefix="/api/library", tags=["Library Information"])
+app.include_router(library_info_route, prefix="/api/library", tags=["Library Information"])
 app.include_router(search_books_router, prefix="/api/search", tags=["Book Search"])
 app.include_router(query_router, prefix="/api/query", tags=["Query Processing"])
 
