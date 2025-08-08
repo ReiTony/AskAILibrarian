@@ -63,8 +63,11 @@ async def expand_query(user_query: str) -> list[str]:
             return EXPANSION_CACHE[qnorm]
 
     prompt = (
-        "Expand the user's topic into 8–15 concise book-related search terms.\n"
-        f"Topic: {user_query!r}\n\nRules:\n- Comma-separated only.\n- Avoid made-up phrases."
+        "You are helping to search a library catalog. Expand the user's topic into 8–15 concise search terms.\n"
+        f"User topic: {user_query!r}\n\n"
+        "Rules:\n- Return ONLY a comma-separated list (no bullets, no numbering).\n"
+        "- Prefer concrete book title terms.\n"
+        "- Avoid made-up phrases."
     )
     try:
         raw = await generate_response(prompt)
@@ -115,14 +118,9 @@ async def fetch_and_add_quantities(books: list[dict]) -> list[dict]:
         for book in books if book.get("biblio_id")
     ]
     quantities = await asyncio.gather(*tasks, return_exceptions=True)
-    cleaned_books = []
     for i, book in enumerate(books):
-        q = quantities[i] if not isinstance(quantities[i], Exception) else 0
-        if isinstance(q, int) and q > 0:
-            book["quantity_available"] = q
-            cleaned_books.append(book)
-    return cleaned_books
-
+        book["quantity_available"] = quantities[i] if not isinstance(quantities[i], Exception) else "Error"
+    return books
 
 # ---------- Main Route ----------
 @router.post("/search_books")
