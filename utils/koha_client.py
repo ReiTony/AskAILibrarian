@@ -68,7 +68,7 @@ def fetch_quantity_from_biblio_id(biblio_id: str) -> int:
     try:
         url = f"http://192.168.1.68:8080/api/v1/biblios/{biblio_id}/items"
         headers = get_auth_headers()
-        response = requests.get(url, headers=headers, timeout=5)
+        response = requests.get(url, headers=headers, timeout=1)
         response.raise_for_status()
 
         items = response.json()
