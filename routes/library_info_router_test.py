@@ -72,7 +72,8 @@ async def library_info(
 
         logger.info(f"[library_info] Query received from cardnumber={cardnumber}")
 
-        user_lang = user_query
+        user_lang = detect_language(user_query)
+        translated_query = await translate_to_english(user_query, user_lang)
 
         # Build LLM history context
         retained = await get_retained_history(db, cardnumber)
@@ -85,38 +86,38 @@ async def library_info(
 
         # Default suggestions + fallback response
         suggestions = default_reminders
-        fallback_prompt = library_fallback_prompt(history_text, user_lang)
+        fallback_prompt = library_fallback_prompt(history_text, translated_query)
 
         # ----- Generate Response -----
         try:
-            simple_query = simplify_query(user_lang)
+            simple_query = simplify_query(translated_query)
             # Try searching ChromaDB for relevant info (e.g., locations, policies)
-            results = web_db.similarity_search(simple_query or user_lang, k=3)
+            results = web_db.similarity_search(simple_query or translated_query, k=3)
 
             if results:
                 context = "\n---\n".join(doc.page_content for doc in results)
-                prompt = library_fallback_prompt(history_text + "\n\n" + context, user_lang)
+                prompt = library_fallback_prompt(history_text + "\n\n" + context, translated_query)
             else:
                 prompt = fallback_prompt
 
             response_text = await generate_response(prompt)
-            suggestions = get_suggestions(user_lang, [])
+            suggestions = get_suggestions(translated_query, [])
         except Exception as e:
             logger.error(f"Error generating LLM response: {e}", exc_info=True)
             response_text = "Sorry, I encountered an error while processing your request."
 
         # ----- Save + Respond -----
-        # translated_response = await translate_to_user_language(response_text, user_lang)
+        translated_response = await translate_to_user_language(response_text, user_lang)
 
         # Save history (short + long)
         await chat_session.add_message("user", user_query)
-        await chat_session.add_message("assistant", response_text)
-        await save_conversation_turn(db, cardnumber, user_query)
+        await chat_session.add_message("assistant", translated_response)
+        await save_conversation_turn(db, cardnumber, user_query, translated_response)
 
         logger.info(f"[Chat Saved] Successfully saved turn for cardnumber={cardnumber}")
 
         # Build and return response
-        response_payload = format_response(response_text, suggestions)
+        response_payload = format_response(translated_response, suggestions)
         response_payload["history"] = await chat_session.get_history()
         return JSONResponse(content=response_payload, status_code=200)
 

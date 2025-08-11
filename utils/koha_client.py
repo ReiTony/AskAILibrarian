@@ -15,6 +15,9 @@ TIMEOUT = 10  # seconds
 
 logger = logging.getLogger("koha_client")
 
+# NEW: A set to store phrases that have already been searched in this session.
+_searched_phrases = set()
+
 # -------------------------------
 # Authentication Header
 # -------------------------------
@@ -36,24 +39,35 @@ def search_books(
 ) -> Union[list[dict[str, Any]], dict[str, str]]:
     """
     Searches Koha using the specified field (title, author, publisher).
-    Attempts both the full query and a fallback on the first word.
+    Attempts both the full query and a fallback on the first word,
+    avoiding duplicate searches within the same session.
     """
     headers = get_auth_headers()
     phrases = [query]
     
-    if (words := query.split()) and words[0] != query:
+    if (words := query.split()) and words[0].lower() != query.lower():
         phrases.append(words[0])
 
     for phrase in phrases:
+        # MODIFIED: Check if we have already searched for this phrase
+        if phrase.lower() in _searched_phrases:
+            logger.info(f"[Koha Search] Skipping duplicate search for: {phrase}")
+            continue
+
         params = {search_type: {"-like": f"%{phrase}%"}}
         try:
             url = f"{API_URL}?q={json.dumps(params)}"
             logger.info(f"[Koha Search] Searching {search_type} with: {phrase}")
+            
+            # MODIFIED: Add the phrase to our set of searched terms *before* the request
+            _searched_phrases.add(phrase.lower())
+
             response = requests.get(url, headers=headers, timeout=TIMEOUT)
             response.raise_for_status()
 
             books = response.json()
             if books:
+                # We found results, so we can stop searching and return them.
                 return [format_book_data(book) for book in books]
 
         except (requests.RequestException, json.JSONDecodeError) as e:

@@ -1,47 +1,41 @@
 import httpx
 from decouple import config
 import logging
+from groq import AsyncGroq, GroqError
 
-OPENROUTER_API_KEY = config("OPENROUTER_API_KEY4")  
+client = AsyncGroq(
+    api_key= config("GROQ_API_KEY"),
+)
+
 SITE_URL = config("SITE_URL", default="http://localhost")
 SITE_TITLE = config("SITE_TITLE", default="Librarian Chatbot")
 
-MODEL_NAME = "mistralai/mistral-small-3.2-24b-instruct:free"
+MODEL_NAME = "qwen/qwen3-32b"
 logger = logging.getLogger("llm_client")
 
 async def generate_response(prompt: str) -> str:
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": SITE_URL,
-        "X-Title": SITE_TITLE
-    }
-
-    payload = {
-        "model": MODEL_NAME,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        "temperature": 0.6,
-        "top_p": 0.9
-    }
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(
-                url="https://openrouter.ai/api/v1/chat/completions",
-                headers=headers,
-                json=payload
+        chat_completion = await client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    }
+                ],
+                model=MODEL_NAME,
+                temperature=0.6,
+                max_tokens=2024, 
+                top_p=0.9,
+                reasoning_format="hidden",
+                reasoning_effort="none"
             )
-
-        if response.status_code == 200:
-            return response.json()["choices"][0]["message"]["content"]
-        else:
-            logger.error(f"OpenRouter API returned error: {response.status_code} - {response.text}")
-            return "[ERROR]: The AI service is currently unavailable. Please try again later."
+        
+        return chat_completion.choices[0].message.content
+               
+    except GroqError as e:
+        logger.error(f"Groq API error: {e.__class__.__name__} - {e}")
+        return "[ERROR]: The AI service returned an error. Please check the logs."
     except Exception as e:
-        logger.error(f"OpenRouter API request failed: {str(e)}")
+        logger.error(f"An unexpected error occurred: {e}")
         return "[ERROR]: The AI service is currently unavailable. Please try again later."
