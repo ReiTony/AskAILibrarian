@@ -6,7 +6,6 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from utils.sessions import get_session_and_user_data
 from utils.intent_classifier import classify_intent
 from utils.chat_retention import get_retained_history
-from utils.language_translator import detect_language, translate_to_english
 from db.connection import get_db
 
 # Handler imports
@@ -44,10 +43,6 @@ async def query_router(
                 status_code=400
             )
 
-        user_lang = detect_language(user_query)
-        translated_query = await translate_to_english(user_query, user_lang)
-        logger.info(f"Translated query: '{translated_query}'")
-
         # Build chat history for LLM context (if needed by intent_classifier or handler)
         retained_history = await get_retained_history(db, cardnumber)
         recent_history = await chat_session.get_history()
@@ -59,7 +54,7 @@ async def query_router(
 
         # --- Central Intent Classification ---
         try:
-            intent = await classify_intent(translated_query, history_text)
+            intent = await classify_intent(user_query, history_text)
             logger.info(f"Detected intent: '{intent}'")
         except Exception as e:
             logger.error(f"Intent classifier failed: {e}. Defaulting to general_info.")
