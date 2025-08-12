@@ -70,7 +70,7 @@ def specific_book_found_prompt(book_title, isbn):
 
 def specific_book_not_found_prompt(query_text):
     return (
-        f"Sorry, I couldn’t find a match in our catalog for \"{query_text}\". "
+        f"Sorry, I couldn’t find a match in our catalog for this {query_text}. "
         "Please double-check the title or ISBN, and feel free to ask about another book — I’m happy to help!"
     )
 
