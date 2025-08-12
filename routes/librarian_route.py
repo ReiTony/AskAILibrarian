@@ -4,21 +4,28 @@ import asyncio
 import spacy
 from threading import RLock
 from cachetools import TTLCache
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from utils.llm_client import generate_response
-from utils.koha_client import search_books, search_specific_book, fetch_quantity_from_biblio_id
+from utils.koha_client import (
+    search_books,
+    fetch_quantity_from_biblio_id,
+    search_by_identifiers,
+)
+
 from utils.sessions import get_session_and_user_data
 from utils.chat_retention import get_retained_history, save_conversation_turn
-from utils.text_utils import (
-    replace_null, clean_query_text,  extract_isbn
-)
+
+from utils.text_utils import replace_null, clean_query_text, extract_identifiers
 from utils.prompt_templates import (
-    search_books_prompt, specific_book_found_prompt,
-    specific_book_not_found_prompt, recommend_books_prompt,
+    search_books_prompt,
+    specific_book_found_prompt,
+    specific_book_not_found_prompt,
+    recommend_books_prompt,
 )
+
 from db.connection import get_db
 
 router = APIRouter()
@@ -27,7 +34,7 @@ nlp = spacy.load("en_core_web_sm")
 
 # Caches
 EXPANSION_CACHE = TTLCache(maxsize=1000, ttl=86400)  # 24h
-KOHA_CACHE = TTLCache(maxsize=5000, ttl=600)         # 10m
+KOHA_CACHE = TTLCache(maxsize=5000, ttl=600)  # 10m
 
 EXPANSION_LOCK = RLock()
 KOHA_LOCK = RLock()
@@ -37,7 +44,12 @@ KOHA_TIMEOUT_SECONDS = 8
 
 # ---------- Utility ----------
 def extract_search_terms(text: str) -> list[str]:
-    return [t.text for t in nlp(text) if t.pos_ in {"NOUN", "PROPN", "ADJ"} and not t.is_stop]
+    return [
+        t.text
+        for t in nlp(text)
+        if t.pos_ in {"NOUN", "PROPN", "ADJ"} and not t.is_stop
+    ]
+
 
 def parse_llm_keyword_list(s: str, max_terms: int = 12) -> list[str]:
     parts = re.split(r"[,|\n]+", s)
@@ -50,6 +62,7 @@ def parse_llm_keyword_list(s: str, max_terms: int = 12) -> list[str]:
             if len(out) >= max_terms:
                 break
     return out
+
 
 def _cache_key(field: str, term: str) -> str:
     return f"{field}::{term.strip().lower()}"
@@ -82,6 +95,7 @@ async def expand_query(user_query: str) -> list[str]:
         EXPANSION_CACHE[qnorm] = keywords
     return keywords
 
+
 def cached_koha_search(field: str, term: str):
     key = _cache_key(field, term)
     with KOHA_LOCK:
@@ -92,14 +106,18 @@ def cached_koha_search(field: str, term: str):
         KOHA_CACHE[key] = result
     return result
 
+
 async def koha_multi_search(keywords: list[str]) -> list[dict]:
     tasks = [asyncio.to_thread(cached_koha_search, "title", kw) for kw in keywords[:8]]
     try:
-        results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=KOHA_TIMEOUT_SECONDS + 4)
+        results = await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=KOHA_TIMEOUT_SECONDS + 4,
+        )
     except asyncio.TimeoutError:
         logger.error("[Koha] search timeout")
         return [{"answer": "Sorry, our book database is taking too long."}]
-    
+
     books, errors = [], 0
     for i, res in enumerate(results):
         if isinstance(res, Exception) or (isinstance(res, dict) and "error" in res):
@@ -112,67 +130,138 @@ async def koha_multi_search(keywords: list[str]) -> list[dict]:
         return [{"answer": "Library database is unavailable or empty."}]
     return books
 
+
 async def fetch_and_add_quantities(books: list[dict]) -> list[dict]:
     tasks = [
         asyncio.to_thread(fetch_quantity_from_biblio_id, book.get("biblio_id"))
-        for book in books if book.get("biblio_id")
+        for book in books
+        if book.get("biblio_id")
     ]
     quantities = await asyncio.gather(*tasks, return_exceptions=True)
     for i, book in enumerate(books):
-        book["quantity_available"] = quantities[i] if not isinstance(quantities[i], Exception) else "Error"
+        book["quantity_available"] = (
+            quantities[i] if not isinstance(quantities[i], Exception) else "Error"
+        )
     return books
+
 
 # ---------- Main Route ----------
 @router.post("/search_books")
 async def search_books_api(
     session_data: tuple = Depends(get_session_and_user_data),
     db: AsyncIOMotorDatabase = Depends(get_db),
-    intent: str = None   # <-- Passed by the main router!
+    intent: str = None,  # <-- Passed by the main router!
 ):
     try:
         chat_session, cardnumber, data = session_data
         user_query = data.get("query", "").strip()
         if not user_query:
-            return JSONResponse(content={"error": "Query is required."}, status_code=400)
+            return JSONResponse(
+                content={"error": "Query is required."}, status_code=400
+            )
 
         logger.info(f"[search_books_api] Received intent: {intent}")
         # Load chat history for context
         try:
-            full_history = await get_retained_history(db, cardnumber) + await chat_session.get_history()
+            full_history = (
+                await get_retained_history(db, cardnumber)
+                + await chat_session.get_history()
+            )
         except Exception as e:
             logger.warning(f"History load error: {e}")
             full_history = []
-        history_text = "\n".join(f"{'Human' if m['role'] == 'user' else 'AI'}: {m['content']}" for m in full_history)
+        history_text = "\n".join(
+            f"{'Human' if m['role'] == 'user' else 'AI'}: {m['content']}"
+            for m in full_history
+        )
         query_clean = clean_query_text(user_query)
 
-        # ----- ISBN Lookup -----
+        # ----- Identifier Lookup (ISBN / ISSN / Call Number) -----
         if intent == "book_lookup_isbn":
-            isbn = extract_isbn(user_query)
-            books = await asyncio.to_thread(search_specific_book, "isbn", isbn)
-            if not books or (isinstance(books, dict) and "error" in books):
-                bot_reply = specific_book_not_found_prompt(isbn)
+            ids = extract_identifiers(user_query)
+            if not any(ids.values()):
+                bot_reply = specific_book_not_found_prompt("ISBN/ISSN/Call Number")
                 await save_conversation_turn(db, cardnumber, user_query, bot_reply)
-                return JSONResponse(content={"response": [{"type": "specific_book_search", "answer": bot_reply, "books": []}]}, status_code=200)
+                return JSONResponse(
+                    content={
+                        "response": [
+                            {
+                                "type": "specific_book_search",
+                                "answer": bot_reply,
+                                "books": [],
+                            }
+                        ]
+                    },
+                    status_code=200,
+                )
 
-            formatted = [{
-                "title": replace_null(b.get("title")).strip(" ,;:"),
-                "author": replace_null(b.get("author")).strip(" ,;:"),
-                "isbn": replace_null(b.get("isbn")),
-                "publisher": replace_null(b.get("publisher")),
-                "year": replace_null(b.get("year")),
-                "biblio_id": replace_null(b.get("biblio_id"))
-            } for b in books[:5]]
+            books = await asyncio.to_thread(search_by_identifiers, ids)
 
-            books = await fetch_and_add_quantities(formatted)
-            bot_reply = specific_book_found_prompt(books[0]["title"], books[0]["isbn"])
+            if not books or (isinstance(books, dict) and "error" in books):
+                reason = (
+                    books.get("error")
+                    if isinstance(books, dict)
+                    else "No matching records"
+                )
+                bot_reply = specific_book_not_found_prompt(reason)
+                await save_conversation_turn(db, cardnumber, user_query, bot_reply)
+                return JSONResponse(
+                    content={
+                        "response": [
+                            {
+                                "type": "specific_book_search",
+                                "answer": bot_reply,
+                                "books": [],
+                            }
+                        ]
+                    },
+                    status_code=200,
+                )
+
+            formatted = []
+            for b in books[:5]:
+                formatted.append(
+                    {
+                        "title": replace_null(b.get("title")).strip(" ,;:"),
+                        "author": replace_null(b.get("author")).strip(" ,;:"),
+                        "isbn": replace_null(b.get("isbn")),
+                        "publisher": replace_null(b.get("publisher")),
+                        "year": replace_null(b.get("year")),
+                        "biblio_id": replace_null(b.get("biblio_id")),
+                        "matched_on": b.get("matched_on", None),
+                    }
+                )
+
+            formatted = await fetch_and_add_quantities(formatted)
+            lead = formatted[0]
+            matched_text = ""
+            if lead.get("matched_on"):
+                mo = lead["matched_on"]
+                matched_text = f" (matched via {mo.get('field')} -> {mo.get('value')})"
+
+            bot_reply = (
+                specific_book_found_prompt(lead["title"], lead["isbn"]) + matched_text
+            )
             await save_conversation_turn(db, cardnumber, user_query, bot_reply)
-            return JSONResponse(content={"response": [{"type": "specific_book_search", "answer": bot_reply, "books": books}]}, status_code=200)
-
+            return JSONResponse(
+                content={
+                    "response": [
+                        {
+                            "type": "specific_book_search",
+                            "answer": bot_reply,
+                            "books": formatted,
+                        }
+                    ]
+                },
+                status_code=200,
+            )
         # ----- Book Recommendation -----
         elif intent == "book_recommend":
             keywords = await expand_query(query_clean)
             raw_results = await koha_multi_search(keywords)
-            if not raw_results or ("answer" in raw_results[0] and len(raw_results) == 1):
+            if not raw_results or (
+                "answer" in raw_results[0] and len(raw_results) == 1
+            ):
                 reply = raw_results[0]["answer"]
                 await save_conversation_turn(db, cardnumber, user_query, reply)
                 return JSONResponse(content={"answer": reply}, status_code=200)
@@ -196,13 +285,22 @@ async def search_books_api(
             prompt = recommend_books_prompt(query_clean, history_text, user_query)
             reply = await generate_response(prompt)
             await save_conversation_turn(db, cardnumber, user_query, reply)
-            return JSONResponse(content={"response": [{"type": "recommendation", "answer": reply, "books": books}]}, status_code=200)
+            return JSONResponse(
+                content={
+                    "response": [
+                        {"type": "recommendation", "answer": reply, "books": books}
+                    ]
+                },
+                status_code=200,
+            )
 
         # ----- Book Search -----
         elif intent == "book_search":
             keywords = await expand_query(query_clean)
             raw_results = await koha_multi_search(keywords)
-            if not raw_results or ("answer" in raw_results[0] and len(raw_results) == 1):
+            if not raw_results or (
+                "answer" in raw_results[0] and len(raw_results) == 1
+            ):
                 reply = raw_results[0]["answer"]
                 await save_conversation_turn(db, cardnumber, user_query, reply)
                 return JSONResponse(content={"answer": reply}, status_code=200)
@@ -219,18 +317,29 @@ async def search_books_api(
                         "biblio_id": replace_null(book.get("biblio_id")),
                         "year": replace_null(book.get("year")),
                     }
-                    if len(books) >= 15:
+                    if len(books) >= 50:
                         break
 
             books = await fetch_and_add_quantities(list(books.values()))
             prompt = search_books_prompt(query_clean, history_text, user_query)
             reply = await generate_response(prompt)
             await save_conversation_turn(db, cardnumber, user_query, reply)
-            return JSONResponse(content={"response": [{"type": "booksearch", "answer": reply, "books": books}]}, status_code=200)
+            return JSONResponse(
+                content={
+                    "response": [
+                        {"type": "booksearch", "answer": reply, "books": books}
+                    ]
+                },
+                status_code=200,
+            )
 
         else:
-            return JSONResponse(content={"error": "Unrecognized query intent."}, status_code=400)
+            return JSONResponse(
+                content={"error": "Unrecognized query intent."}, status_code=400
+            )
 
     except Exception as e:
         logger.error(f"[Unhandled Error] {e}")
-        return JSONResponse(content={"error": "Internal server error."}, status_code=500)
+        return JSONResponse(
+            content={"error": "Internal server error."}, status_code=500
+        )
