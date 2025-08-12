@@ -63,9 +63,10 @@ _ISSN_CAND_RE = re.compile(r'\b\d{4}[-\s]?\d{3}[\dXx]\b')
 # Pure 9-digit SBN (pre-ISBN, no hyphens)
 _SBN_CAND_RE  = re.compile(r'\b\d{9}\b')
 
-# Library call numbers like "TJ1165 M3 1968", "QA76.73 .J38 2020"
 _CALLNO_RE = re.compile(
-    r'\b(?:[A-Z]{1,3}\s*\d{1,4}(?:\.\d+)?(?:\s*\.[A-Z]\d+)?(?:\s*[A-Z]\d+)?(?:\s*\d{4})?)\b'
+    r'\b(?:[A-Z]{1,3}\s*\d{1,4}(?:\.\d+)?)'           
+    r'(?:\s*[.\s]?[A-Z]{1,3}\d{0,4}[A-Z]{0,3})*'      
+    r'(?:\s*\d{4})?\b'                                 
 )
 
 def expand_sbn_to_isbn10(compact_digits: str) -> Optional[str]:
