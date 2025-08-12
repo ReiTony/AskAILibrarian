@@ -228,20 +228,13 @@ async def search_books_api(
                         "publisher": replace_null(b.get("publisher")),
                         "year": replace_null(b.get("year")),
                         "biblio_id": replace_null(b.get("biblio_id")),
-                        "matched_on": b.get("matched_on", None),
                     }
                 )
 
             formatted = await fetch_and_add_quantities(formatted)
             lead = formatted[0]
-            matched_text = ""
-            if lead.get("matched_on"):
-                mo = lead["matched_on"]
-                matched_text = f" (matched via {mo.get('field')} -> {mo.get('value')})"
-
             bot_reply = (
-                specific_book_found_prompt(lead["title"], lead["isbn"]) + matched_text
-            )
+                specific_book_found_prompt(lead["title"], lead["isbn"]))
             await save_conversation_turn(db, cardnumber, user_query, bot_reply)
             return JSONResponse(
                 content={
