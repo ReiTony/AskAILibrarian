@@ -164,3 +164,47 @@ def get_router_prompt(history_text: str, latest_query: str) -> str:
 
     Tool:
     """
+
+
+def contextual_search_topic_prompt(history: str, current_query: str) -> str:
+    """
+    Creates a prompt to resolve the actual search topic from a conversation.
+    """
+    return f"""
+You are an intelligent assistant that determines the specific topic for a library book search based on a conversation.
+
+**Conversation History:**
+{history}
+
+**Latest User Query:** "{current_query}"
+
+**Your Task:**
+Analyze the history and the latest query. What is the core topic the user wants to find books about?
+- If the latest query is a follow-up (e.g., "recommend me more", "what about others?", "any more like that?"), extract the topic from the previous conversation turn.
+- If the latest query introduces a completely new topic, use that new topic.
+- Your response MUST BE ONLY the search topic keywords. Do not add any explanation or conversational text.
+
+**Example 1:**
+History:
+Human: find me books on python programming
+AI: I found several books on Python...
+Latest Query: "show me more"
+Your Response: python programming
+
+**Example 2:**
+History:
+Human: I need a book about the history of Rome.
+AI: Here are some books about Roman history.
+Latest Query: "okay, now find me books about machine learning"
+Your Response: machine learning
+
+**Example 3:**
+History:
+<empty>
+Latest Query: "I need a book about world war 2"
+Your Response: world war 2
+
+Now, determine the topic for the given history and query.
+
+Your Response:
+"""
