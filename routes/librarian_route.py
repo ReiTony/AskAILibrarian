@@ -24,6 +24,7 @@ from utils.prompt_templates import (
     specific_book_found_prompt,
     specific_book_not_found_prompt,
     recommend_books_prompt,
+    contextual_search_topic_prompt
 )
 
 from db.connection import get_db
@@ -68,6 +69,41 @@ def _cache_key(field: str, term: str) -> str:
     return f"{field}::{term.strip().lower()}"
 
 
+async def resolve_search_topic(user_query: str, history_text: str) -> str:
+    """
+    Uses an LLM to determine the true search topic based on conversation context.
+    Returns the resolved topic as a string.
+    """
+    # A simple heuristic: if the query is very short or contains follow-up words,
+    follow_up_words = {'more', 'another', 'else', 'other', 'others', 'again'}
+    query_words = set(user_query.lower().split())
+
+    # If the query is long or doesn't seem like a follow-up, just use it as is
+    # to save an LLM call. You can adjust this logic.
+    if len(query_words) > 4 and not query_words.intersection(follow_up_words):
+        logger.info("[Context Resolver] Query is specific, skipping LLM resolution.")
+        return user_query
+
+    logger.info(f"[Context Resolver] Query '{user_query}' might be a follow-up. Asking LLM for context.")
+    try:
+        # Ask the LLM to figure out the real topic
+        prompt = contextual_search_topic_prompt(history_text, user_query)
+        resolved_topic = await generate_response(prompt)
+        
+        # Clean up the LLM response
+        resolved_topic = resolved_topic.strip().strip('"')
+        
+        if not resolved_topic:
+             logger.warning("[Context Resolver] LLM returned empty topic, falling back to original query.")
+             return user_query
+
+        logger.info(f"[Context Resolver] Resolved topic: '{user_query}' -> '{resolved_topic}'")
+        return resolved_topic
+
+    except Exception as e:
+        logger.error(f"[Context Resolver] Error resolving topic: {e}. Falling back to original query.")
+        return user_query
+
 # ---------- Cached + Parallel Ops ----------
 async def expand_query(user_query: str) -> list[str]:
     qnorm = clean_query_text(user_query).lower()
@@ -96,19 +132,20 @@ async def expand_query(user_query: str) -> list[str]:
     return keywords
 
 
-def cached_koha_search(field: str, term: str):
-    key = _cache_key(field, term)
+def cached_koha_search(term: str, session_id: str = "global"):
+    key = _cache_key("title", term)
     with KOHA_LOCK:
         if key in KOHA_CACHE:
             return KOHA_CACHE[key]
-    result = search_books(field, term)
+    result = search_books(query=term, session_id=session_id)  # fixed
     with KOHA_LOCK:
         KOHA_CACHE[key] = result
     return result
 
 
-async def koha_multi_search(keywords: list[str]) -> list[dict]:
-    tasks = [asyncio.to_thread(cached_koha_search, "title", kw) for kw in keywords[:8]]
+
+async def koha_multi_search(keywords: list[str], session_id: str = "global") -> list[dict]:
+    tasks = [asyncio.to_thread(cached_koha_search, kw, session_id) for kw in keywords[:8]]
     try:
         results = await asyncio.wait_for(
             asyncio.gather(*tasks, return_exceptions=True),
@@ -119,7 +156,7 @@ async def koha_multi_search(keywords: list[str]) -> list[dict]:
         return [{"answer": "Sorry, our book database is taking too long."}]
 
     books, errors = [], 0
-    for i, res in enumerate(results):
+    for res in results:
         if isinstance(res, Exception) or (isinstance(res, dict) and "error" in res):
             errors += 1
             continue
@@ -163,18 +200,18 @@ async def search_books_api(
         logger.info(f"[search_books_api] Received intent: {intent}")
         # Load chat history for context
         try:
-            full_history = (
-                await get_retained_history(db, cardnumber)
-                + await chat_session.get_history()
-            )
+            full_history = await get_retained_history(db, cardnumber) + await chat_session.get_history()
         except Exception as e:
             logger.warning(f"History load error: {e}")
             full_history = []
-        history_text = "\n".join(
-            f"{'Human' if m['role'] == 'user' else 'AI'}: {m['content']}"
-            for m in full_history
-        )
-        query_clean = clean_query_text(user_query)
+        history_text = "\n".join(f"{'Human' if m['role'] == 'user' else 'AI'}: {m['content']}" for m in full_history[-6:])
+
+        if intent in ["book_search", "book_recommend"]:
+            contextual_query = await resolve_search_topic(user_query, history_text)
+        else:
+            contextual_query = user_query
+        
+        query_clean = clean_query_text(contextual_query)
 
         # ----- Identifier Lookup (ISBN / ISSN / Call Number) -----
         if intent == "book_lookup_isbn":
