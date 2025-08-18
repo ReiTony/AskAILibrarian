@@ -15,7 +15,7 @@ logger = logging.getLogger("chat_route")
 router = APIRouter()
 
 def get_chat_collection(db: AsyncIOMotorDatabase):
-    return db["chathistories"]
+    return db["chat_retention_history"]
 
 def clean_object_ids(obj):
     if isinstance(obj, list):
@@ -84,13 +84,20 @@ async def save_chat(
 @router.get("/get-chat-history")
 async def get_chat_history(cardnumber: str, db = Depends(get_db)):
     try:
+        logger.info(f"Fetching chat history for card number: {cardnumber}")
         chat = await get_chat_collection(db).find_one({"cardnumber": cardnumber})
-        if not chat or "sessions" not in chat:
-            return []
-        cleaned_sessions = clean_object_ids(chat["sessions"])
-        return cleaned_sessions
+        
+        if not chat:
+            logger.info(f"No chat found for card number: {cardnumber}")
+            return None
+            
+        # Remove sessions before returning
+        chat.pop('sessions', None)
+        cleaned_chat = clean_object_ids(chat)
+        return cleaned_chat
+        
     except Exception as e:
-        logger.error(f"Get chat history error: {e}")
+        logger.error(f"Get chat history error for {cardnumber}: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error.")
 
 # --------------------------------------------
