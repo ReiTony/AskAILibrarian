@@ -10,7 +10,7 @@ COLLECTION_NAME = "chat_retention_history"
 
 async def save_conversation_turn(
     db: AsyncIOMotorDatabase,
-    cardNumber: str,
+    cardnumber: str,
     user_query: str,
     ai_response: str
 ) -> None:
@@ -20,11 +20,11 @@ async def save_conversation_turn(
 
     Args:
         db (AsyncIOMotorDatabase): MongoDB database instance.
-        cardNumber (str): User identifier.
+        cardnumber (str): User identifier.
         user_query (str): Text input from the user.
         ai_response (str): AI-generated response.
     """
-    if not all([cardNumber, user_query, ai_response]):
+    if not all([cardnumber, user_query, ai_response]):
         logger.warning("[Chat Retention] Missing data — skipping save.")
         return
 
@@ -38,7 +38,7 @@ async def save_conversation_turn(
 
     try:
         await collection.find_one_and_update(
-            {"cardNumber": cardNumber},
+            {"cardnumber": cardnumber},
             {
                 "$push": {
                     "history": {
@@ -50,14 +50,14 @@ async def save_conversation_turn(
             },
             upsert=True
         )
-        logger.info(f"[Chat Retention] Saved turn for {cardNumber} ({len(messages)} messages).")
+        logger.info(f"[Chat Retention] Saved turn for {cardnumber} ({len(messages)} messages).")
     except Exception as e:
-        logger.error(f"[Chat Retention] Error saving for {cardNumber}: {e}", exc_info=True)
+        logger.error(f"[Chat Retention] Error saving for {cardnumber}: {e}", exc_info=True)
 
 
 async def get_retained_history(
     db: AsyncIOMotorDatabase,
-    cardNumber: str
+    cardnumber: str
 ) -> List[Dict[str, str]]:
     """
     Retrieve the last RETENTION_LIMIT messages for a user.
@@ -69,19 +69,19 @@ async def get_retained_history(
     Returns:
         List[Dict]: Message history (role, content, timestamp).
     """
-    if not cardNumber:
-        logger.warning("[Chat Retention] Missing cardNumber — returning empty history.")
+    if not cardnumber:
+        logger.warning("[Chat Retention] Missing cardnumber — returning empty history.")
         return []
 
     collection = db[COLLECTION_NAME]
     try:
         document = await collection.find_one(
-            {"cardNumber": cardNumber},
+            {"cardnumber": cardnumber},
             {"history": 1, "_id": 0}
         )
         history = document.get("history", []) if document else []
-        logger.info(f"[Chat Retention] Retrieved {len(history)} messages for {cardNumber}.")
+        logger.info(f"[Chat Retention] Retrieved {len(history)} messages for {cardnumber}.")
         return history
     except Exception as e:
-        logger.error(f"[Chat Retention] Error fetching for {cardNumber}: {e}", exc_info=True)
+        logger.error(f"[Chat Retention] Error fetching for {cardnumber}: {e}", exc_info=True)
         return []
