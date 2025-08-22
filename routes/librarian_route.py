@@ -137,7 +137,7 @@ def cached_koha_search(term: str, session_id: str = "global"):
     with KOHA_LOCK:
         if key in KOHA_CACHE:
             return KOHA_CACHE[key]
-    result = search_books(query=term, session_id=session_id)  # fixed
+    result = search_books(query=term, session_id=session_id)  
     with KOHA_LOCK:
         KOHA_CACHE[key] = result
     return result
