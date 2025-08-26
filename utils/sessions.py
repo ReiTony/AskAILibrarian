@@ -61,11 +61,11 @@ async def get_session_and_user_data(
         pass
 
     # 2. Try to get cardnumber from the session object first (from a previous request)
-    cardnumber = getattr(chat_session, 'cardnumber', None)
+    cardnumber = getattr(chat_session, 'cardNumber', None)
 
     # 3. If not on the session, check the incoming request body
     if not cardnumber:
-        cardnumber_from_request = request_data.get("cardnumber")
+        cardnumber_from_request = request_data.get("cardNumber")
         if cardnumber_from_request:
             # If found in the request, ATTACH IT to the session object for future requests.
             chat_session.cardnumber = cardnumber_from_request

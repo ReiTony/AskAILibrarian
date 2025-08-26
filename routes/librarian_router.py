@@ -76,17 +76,21 @@ async def resolve_search_topic(user_query: str, history_text: str) -> str:
     Uses an LLM to determine the true search topic based on conversation context.
     Returns the resolved topic as a string.
     """
-    # A simple heuristic: if the query is very short or contains follow-up words,
-    follow_up_words = {'more', 'another', 'else', 'other', 'others', 'again'}
-    query_words = set(user_query.lower().split())
+    follow_up_words = {'more', 'another', 'else', 'other', 'others', 'again', 'some more', 'show me more'}
+    query_words = set(clean_query_text(user_query).lower().split())
 
-    # If the query is long or doesn't seem like a follow-up, just use it as is
-    # to save an LLM call. You can adjust this logic.
-    if len(query_words) > 4 and not query_words.intersection(follow_up_words):
-        logger.info("[Context Resolver] Query is specific, skipping LLM resolution.")
+    # --- REVISED HEURISTIC ---
+    # We will perform a contextual search if the query is very short (<= 2 words)
+    # OR if it clearly contains a follow-up phrase.
+    is_follow_up = bool(query_words.intersection(follow_up_words))
+    is_short_query = len(query_words) <= 2
+
+    # If the query is NOT a follow-up AND is long enough, we can skip the LLM call.
+    if not is_follow_up and not is_short_query:
+        logger.info("[Context Resolver] Query seems specific, skipping LLM resolution.")
         return user_query
 
-    logger.info(f"[Context Resolver] Query '{user_query}' might be a follow-up. Asking LLM for context.")
+    logger.info(f"[Context Resolver] Query '{user_query}' is short or a follow-up. Asking LLM to resolve topic from history.")
     try:
         # Ask the LLM to figure out the real topic
         prompt = contextual_search_topic_prompt(history_text, user_query)
@@ -95,10 +99,11 @@ async def resolve_search_topic(user_query: str, history_text: str) -> str:
         resolved_topic = await generate_response(prompt)
         
         # Clean up the LLM response
-        resolved_topic = resolved_topic.strip().strip('"')
+        resolved_topic = resolved_topic.strip().strip('"').strip()
         
-        if not resolved_topic:
-             logger.warning("[Context Resolver] LLM returned empty topic, falling back to original query.")
+        # Fallback if the LLM returns an empty string or a useless phrase
+        if not resolved_topic or resolved_topic.lower() in ["similar books", "more books"]:
+             logger.warning(f"[Context Resolver] LLM returned a weak topic ('{resolved_topic}'). Falling back to original query.")
              return user_query
 
         logger.info(f"[Context Resolver] Resolved topic: '{user_query}' -> '{resolved_topic}'")
@@ -116,7 +121,7 @@ async def expand_query(user_query: str) -> list[str]:
             return EXPANSION_CACHE[qnorm]
 
     prompt = (
-        "You are helping to search a library catalog. Expand the user's topic into 8–15 concise search terms.\n"
+        "You are helping to search a library catalog. Expand the user's topic into 7 concise search terms.\n"
         f"User topic: {user_query!r}\n\n"
         "Rules:\n- Return ONLY a comma-separated list (no bullets, no numbering).\n"
         "- Prefer concrete book title terms.\n"
