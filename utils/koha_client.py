@@ -2,9 +2,11 @@ import base64
 import json
 import logging
 import requests
-from typing import Any, Literal, Union, List, Dict
+from typing import Any, Union, List, Dict
 from decouple import config
+from collections import defaultdict
 from cachetools import TTLCache
+import re
 
 # -------------------------------
 # Configuration
@@ -16,7 +18,9 @@ TIMEOUT = 10  # seconds
 
 logger = logging.getLogger("koha_client")
 
-# A set to store phrases that have already been searched in this session.
+# -------------------------------
+# Cache
+# -------------------------------
 _search_cache = TTLCache(maxsize=1000, ttl=300)
 
 # -------------------------------
@@ -30,7 +34,6 @@ def get_auth_headers() -> dict[str, str]:
         "Authorization": f"Basic {token}",
         "Accept": "application/json"
     }
-
 
 # -------------------------------
 # Helpers for Koha query building
@@ -48,11 +51,10 @@ def _get(url: str, headers: dict) -> Any:
     r.raise_for_status()
     return r.json()
 
-
 # -------------------------------
 # Search Books (General)
 # -------------------------------
-def search_books(query: str, session_id: str = "global") -> Union[list[dict[str, Any]], dict[str, str]]:
+def search_books(query: str, session_id: str = "global") -> Union[List[Dict[str, Any]], Dict[str, str]]:
     """
     Search books in Koha by title.
     Tries full query and fallback on first word.
@@ -84,10 +86,43 @@ def search_books(query: str, session_id: str = "global") -> Union[list[dict[str,
             if books:
                 return result
         except (requests.RequestException, json.JSONDecodeError) as e:
-            logger.error(f"[Koha Search] Error: {e}")
-            return {"error": f"Koha API unreachable: {e}"}
+            logger.error(f"[Koha Search] Error during API call for phrase '{phrase}': {e}")
+            return {"error": f"Koha API could not be reached: {e}"}
 
     return {"error": "No books found."}
+
+# -------------------------------
+# Batch Fetch Items
+# -------------------------------
+def fetch_items_for_multiple_biblios(biblio_ids: List[Union[str, int]]) -> Dict[int, List[Dict]]:
+    """
+    Fetches all items for a given list of biblio_ids in a single API call.
+    """
+    if not biblio_ids:
+        return {}
+
+    clean_biblio_ids = [int(bid) for bid in biblio_ids]
+    headers = get_auth_headers()
+    params = {"biblio_id": clean_biblio_ids}
+    url = f"{API_URL}/items?q={json.dumps(params)}"
+
+    try:
+        logger.info(f"[Koha Items] Fetching items for {len(clean_biblio_ids)} biblio records.")
+        response = requests.get(url, headers=headers, timeout=TIMEOUT)
+        response.raise_for_status()
+
+        items = response.json()
+        items_by_biblio = defaultdict(list)
+
+        if isinstance(items, list):
+            for item in items:
+                items_by_biblio[item.get("biblio_id")].append(item)
+
+        return items_by_biblio
+
+    except (requests.RequestException, json.JSONDecodeError) as e:
+        logger.error(f"[Koha Items] Error fetching items for multiple biblios: {e}")
+        return {}
 
 def fetch_quantity_from_biblio_id(biblio_id: str) -> int:
     """Fetch number of items available for a given biblio_id."""
@@ -102,9 +137,9 @@ def fetch_quantity_from_biblio_id(biblio_id: str) -> int:
     except Exception as e:
         logger.error(f"[Koha] Error fetching quantity for biblio_id {biblio_id}: {e}")
         return 0
-    
+
 # -------------------------------
-# Search by any identifier (ISBN, ISSN, Call No.)
+# Identifier Search
 # -------------------------------
 FIELD_ISBN = "isbn"        
 
@@ -114,104 +149,68 @@ def _with_period_variants(val: str) -> list[str]:
 def _like_contains(value: str) -> dict:
     return {"-like": f"%{value}%"}
 
+def _perform_identifier_search(headers: dict, field: str, value: str) -> list[dict[str, Any]] | None:
+    """Exact match then 'contains' match for a given field/value."""
+    try:
+        url = f"{API_URL}?q={_q({field: value})}"
+        logger.info(f"[Koha Lookup] Trying {field} (exact): {value!r}")
+        data = _get(url, headers)
+        if data:
+            out = _format_list(data)
+            for b in out:
+                b["matched_on"] = {"field": f"{field} (exact)", "value": value}
+            return out
+    except Exception as e:
+        logger.warning(f"[Koha Lookup] Error on {field} (exact) for {value!r}: {e}")
+
+    try:
+        url = f"{API_URL}?q={_q({field: _like_contains(value)})}"
+        logger.info(f"[Koha Lookup] Trying {field} (contains): {value!r}")
+        data = _get(url, headers)
+        if data:
+            out = _format_list(data)
+            for b in out:
+                b["matched_on"] = {"field": f"{field} (contains)", "value": value}
+            return out
+    except Exception as e:
+        logger.warning(f"[Koha Lookup] Error on {field} (contains) for {value!r}: {e}")
+
+    return None
+
 def search_by_identifiers(identifiers: Dict[str, List[str]]) -> Union[list[dict[str, Any]], dict[str, str]]:
+    """
+    Searches for books by ISBN, ISSN, or Call Number.
+    """
     headers = get_auth_headers()
 
-    # 1) ISBN
-    for isbn in identifiers.get("isbn", []):
-        for v in _with_period_variants(isbn):
-            try:
-                url = f"{API_URL}?q={_q({FIELD_ISBN: v})}"
-                logger.info(f"[Koha Lookup] ISBN exact via {FIELD_ISBN}: {v!r}")
-                data = _get(url, headers)
-                if data:
-                    out = _format_list(data)
-                    for b in out:
-                        b["matched_on"] = {"field": f"{FIELD_ISBN} (isbn-exact)", "value": v}
-                    return out
-            except Exception as e:
-                logger.warning(f"[Koha Lookup] ISBN exact error for {v!r}: {e}")
+    # ISBN / ISSN
+    for field in ["isbn", "issn"]:
+        for value in identifiers.get(field, []):
+            variants = _with_period_variants(value)
+            for variant in variants:
+                result = _perform_identifier_search(headers, field, variant)
+                if result:
+                    return result
 
-        for v in _with_period_variants(isbn):
-            try:
-                url = f"{API_URL}?q={_q({FIELD_ISBN: _like_contains(v)})}"
-                logger.info(f"[Koha Lookup] ISBN contains via {FIELD_ISBN}: {v!r}")
-                data = _get(url, headers)
-                if data:
-                    out = _format_list(data)
-                    for b in out:
-                        b["matched_on"] = {"field": f"{FIELD_ISBN} (isbn-contains)", "value": v}
-                    return out
-            except Exception as e:
-                logger.warning(f"[Koha Lookup] ISBN contains error for {v!r}: {e}")
+    # Call numbers (using ISBN field in Koha)
+    call_numbers = identifiers.get("call_numbers", [])
+    if call_numbers:
+        logger.info("[Koha Lookup] No match on ISBN/ISSN. Trying Call Number search via 'isbn' field.")
+        for cn in call_numbers:
+            variants = _with_period_variants(cn)
+            variants.append(re.sub(r"\s+", " ", cn).strip())
+            variants.append(cn.replace(".", " ").strip())
+            seen = set()
+            variants = [v for v in variants if not (v in seen or seen.add(v))]
 
-    # 2) ISSN 
-    for issn in identifiers.get("issn", []):
-        for v in _with_period_variants(issn):
-            try:
-                url = f"{API_URL}?q={_q({FIELD_ISBN: v})}"
-                logger.info(f"[Koha Lookup] ISSN exact via {FIELD_ISBN}: {v!r}")
-                data = _get(url, headers)
-                if data:
-                    out = _format_list(data)
-                    for b in out:
-                        b["matched_on"] = {"field": f"{FIELD_ISBN} (issn-exact)", "value": v}
-                    return out
-            except Exception as e:
-                logger.warning(f"[Koha Lookup] ISSN exact error for {v!r}: {e}")
+            for variant in variants:
+                result = _perform_identifier_search(headers, "isbn", variant)
+                if result:
+                    for book in result:
+                        book["matched_on"]["field"] = "isbn (callno-search)"
+                    return result
 
-        for v in _with_period_variants(issn):
-            try:
-                url = f"{API_URL}?q={_q({FIELD_ISBN: _like_contains(v)})}"
-                logger.info(f"[Koha Lookup] ISSN contains via {FIELD_ISBN}: {v!r}")
-                data = _get(url, headers)
-                if data:
-                    out = _format_list(data)
-                    for b in out:
-                        b["matched_on"] = {"field": f"{FIELD_ISBN} (issn-contains)", "value": v}
-                    return out
-            except Exception as e:
-                logger.warning(f"[Koha Lookup] ISSN contains error for {v!r}: {e}")
-
-    # 3) Call Numbers 
-    import re as _re
-    callnos = identifiers.get("call_numbers", [])
-    for cn in callnos:
-        variants = _with_period_variants(cn)
-        variants += [
-            _re.sub(r"\s+", " ", cn).strip(),     
-            cn.replace(".", " ").strip(),     
-        ]
-        # de-dup while preserving order
-        seen = set(); variants = [x for x in variants if not (x in seen or seen.add(x))]
-
-        # exact
-        for v in variants:
-            try:
-                url = f"{API_URL}?q={_q({FIELD_ISBN: v})}"
-                logger.info(f"[Koha Lookup] CALLNO exact via {FIELD_ISBN}: {v!r}")
-                data = _get(url, headers)
-                if data:
-                    out = _format_list(data)
-                    for b in out:
-                        b["matched_on"] = {"field": f"{FIELD_ISBN} (callno-exact)", "value": v}
-                    return out
-            except Exception as e:
-                logger.warning(f"[Koha Lookup] CALLNO exact error for {v!r}: {e}")
-
-        # contains
-        for v in variants:
-            try:
-                url = f"{API_URL}?q={_q({FIELD_ISBN: _like_contains(v)})}"
-                logger.info(f"[Koha Lookup] CALLNO contains via {FIELD_ISBN}: {v!r}")
-                data = _get(url, headers)
-                if data:
-                    out = _format_list(data)
-                    for b in out:
-                        b["matched_on"] = {"field": f"{FIELD_ISBN} (callno-contains)", "value": v}
-                    return out
-            except Exception as e:
-                logger.warning(f"[Koha Lookup] CALLNO contains error for {v!r}: {e}")
+    return {"error": "No matching records found."}
 
 # -------------------------------
 # Helpers
