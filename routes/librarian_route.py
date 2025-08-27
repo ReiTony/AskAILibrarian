@@ -153,7 +153,13 @@ def cached_koha_search(term: str):
 
 
 async def koha_multi_search(keywords: list[str], session_id: str = "global") -> list[dict]:
-    tasks = [asyncio.to_thread(cached_koha_search, kw) for kw in keywords[:8]]
+    sem = asyncio.Semaphore(5)  
+
+    async def safe_search(term):
+        async with sem:
+            return await asyncio.to_thread(cached_koha_search, term)
+
+    tasks = [safe_search(kw) for kw in keywords[:8]]
     try:
         results = await asyncio.wait_for(
             asyncio.gather(*tasks, return_exceptions=True),
