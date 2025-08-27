@@ -11,7 +11,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from utils.llm_client import generate_response
 from utils.koha_client import (
     search_books,
-    fetch_items_for_multiple_biblios,
+    fetch_quantity_from_biblio_id,
     search_by_identifiers,
 )
 
@@ -175,29 +175,28 @@ async def koha_multi_search(keywords: list[str], session_id: str = "global") -> 
         return [{"answer": "Library database is unavailable or empty."}]
     return books
 
+# --- replace this function ---
 async def fetch_and_add_quantities(books: list[dict]) -> list[dict]:
-    # 1. Collect all the unique biblio_ids from the list of books
-    biblio_ids = list(set(
-        book.get("biblio_id") for book in books if book.get("biblio_id")
-    ))
-    
-    if not biblio_ids:
-        return books # Return early if no IDs to process
-
-    # 2. Make ONE single, efficient API call to get all items
-    items_by_biblio_id = await asyncio.to_thread(
-        fetch_items_for_multiple_biblios, biblio_ids
-    )
-
-    # 3. Add the quantity to each book by checking the count of items
-    for book in books:
-        book_id = book.get("biblio_id")
-        if book_id in items_by_biblio_id:
-            book["quantity_available"] = len(items_by_biblio_id[book_id])
-        else:
+    """
+    For each book, fetch the number of available items via its biblio_id.
+    """
+    async def add_quantity(book: dict) -> dict:
+        biblio_id = book.get("biblio_id")
+        if not biblio_id or biblio_id == "N/A":
             book["quantity_available"] = 0
-            
-    return books
+            return book
+
+        try:
+            qty = await asyncio.to_thread(fetch_quantity_from_biblio_id, biblio_id)
+            book["quantity_available"] = qty
+        except Exception as e:
+            logger.error(f"[Quantity Fetch] Error for biblio_id {biblio_id}: {e}")
+            book["quantity_available"] = 0
+        return book
+
+    tasks = [add_quantity(book) for book in books]
+    return await asyncio.gather(*tasks)
+
 
 # ---------- Main Route ----------
 @router.post("/search_books")

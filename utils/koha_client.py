@@ -92,38 +92,8 @@ def search_books(query: str, session_id: str = "global") -> Union[List[Dict[str,
     return {"error": "No books found."}
 
 # -------------------------------
-# Batch Fetch Items
+# Fetch Items
 # -------------------------------
-def fetch_items_for_multiple_biblios(biblio_ids: List[Union[str, int]]) -> Dict[int, List[Dict]]:
-    """
-    Fetches all items for a given list of biblio_ids in a single API call.
-    """
-    if not biblio_ids:
-        return {}
-
-    clean_biblio_ids = [int(bid) for bid in biblio_ids]
-    headers = get_auth_headers()
-    params = {"biblio_id": clean_biblio_ids}
-    url = f"{API_URL}/items?q={json.dumps(params)}"
-
-    try:
-        logger.info(f"[Koha Items] Fetching items for {len(clean_biblio_ids)} biblio records.")
-        response = requests.get(url, headers=headers, timeout=TIMEOUT)
-        response.raise_for_status()
-
-        items = response.json()
-        items_by_biblio = defaultdict(list)
-
-        if isinstance(items, list):
-            for item in items:
-                items_by_biblio[item.get("biblio_id")].append(item)
-
-        return items_by_biblio
-
-    except (requests.RequestException, json.JSONDecodeError) as e:
-        logger.error(f"[Koha Items] Error fetching items for multiple biblios: {e}")
-        return {}
-
 def fetch_quantity_from_biblio_id(biblio_id: str) -> int:
     """Fetch number of items available for a given biblio_id."""
     try:
