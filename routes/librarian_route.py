@@ -35,12 +35,10 @@ nlp = spacy.load("en_core_web_sm")
 
 # Caches
 EXPANSION_CACHE = TTLCache(maxsize=1000, ttl=86400)  # 24h
-KOHA_CACHE = TTLCache(maxsize=5000, ttl=600)  # 10m
-
 EXPANSION_LOCK = RLock()
-KOHA_LOCK = RLock()
 
-KOHA_TIMEOUT_SECONDS = 8
+
+KOHA_TIMEOUT_SECONDS = 6
 
 
 # ---------- Utility ----------
@@ -65,10 +63,6 @@ def parse_llm_keyword_list(s: str, max_terms: int = 12) -> list[str]:
     return out
 
 
-def _cache_key(field: str, term: str) -> str:
-    return f"{field}::{term.strip().lower()}"
-
-
 async def resolve_search_topic(user_query: str, history_text: str) -> str:
     """
     Uses an LLM to determine the true search topic based on conversation context.
@@ -77,32 +71,24 @@ async def resolve_search_topic(user_query: str, history_text: str) -> str:
     follow_up_words = {'more', 'another', 'else', 'other', 'others', 'again', 'some more', 'show me more'}
     query_words = set(clean_query_text(user_query).lower().split())
 
-    # --- REVISED HEURISTIC ---
-    # We will perform a contextual search if the query is very short (<= 2 words)
-    # OR if it clearly contains a follow-up phrase.
     is_follow_up = bool(query_words.intersection(follow_up_words))
     is_short_query = len(query_words) <= 2
 
-    # If the query is NOT a follow-up AND is long enough, we can skip the LLM call.
     if not is_follow_up and not is_short_query:
         logger.info("[Context Resolver] Query seems specific, skipping LLM resolution.")
         return user_query
 
     logger.info(f"[Context Resolver] Query '{user_query}' is short or a follow-up. Asking LLM to resolve topic from history.")
     try:
-        # Ask the LLM to figure out the real topic
         prompt = contextual_search_topic_prompt(history_text, user_query)
         logger.info(f"[Context Resolver] History context:\n{history_text}\n\n")
 
         resolved_topic = await generate_response(prompt)
-        
-        # Clean up the LLM response
         resolved_topic = resolved_topic.strip().strip('"').strip()
-        
-        # Fallback if the LLM returns an empty string or a useless phrase
+
         if not resolved_topic or resolved_topic.lower() in ["similar books", "more books"]:
-             logger.warning(f"[Context Resolver] LLM returned a weak topic ('{resolved_topic}'). Falling back to original query.")
-             return user_query
+            logger.warning(f"[Context Resolver] LLM returned a weak topic ('{resolved_topic}'). Falling back to original query.")
+            return user_query
 
         logger.info(f"[Context Resolver] Resolved topic: '{user_query}' -> '{resolved_topic}'")
         return resolved_topic
@@ -111,7 +97,8 @@ async def resolve_search_topic(user_query: str, history_text: str) -> str:
         logger.error(f"[Context Resolver] Error resolving topic: {e}. Falling back to original query.")
         return user_query
 
-# ---------- Cached + Parallel Ops ----------
+
+# ---------- Parallel Ops ----------
 async def expand_query(user_query: str) -> list[str]:
     qnorm = clean_query_text(user_query).lower()
     with EXPANSION_LOCK:
@@ -119,7 +106,7 @@ async def expand_query(user_query: str) -> list[str]:
             return EXPANSION_CACHE[qnorm]
 
     prompt = (
-        "You are helping to search a library catalog. Expand the user's topic into 7 concise search terms.\n"
+        "You are helping to search a library catalog. Expand the user's topic into 5 concise search terms.\n"
         f"User topic: {user_query!r}\n\n"
         "Rules:\n- Return ONLY a comma-separated list (no bullets, no numbering).\n"
         "- Prefer concrete book title terms.\n"
@@ -139,31 +126,18 @@ async def expand_query(user_query: str) -> list[str]:
     return keywords
 
 
-def cached_koha_search(term: str):
-    key = _cache_key("title", term)
-    with KOHA_LOCK:
-        if key in KOHA_CACHE:
-            return KOHA_CACHE[key]
-    # The call to search_books no longer passes the invalid argument
-    result = search_books(query=term)
-    with KOHA_LOCK:
-        KOHA_CACHE[key] = result
-    return result
-
-
-
-async def koha_multi_search(keywords: list[str], session_id: str = "global") -> list[dict]:
-    sem = asyncio.Semaphore(5)  
+async def koha_multi_search(keywords: list[str]) -> list[dict]:
+    sem = asyncio.Semaphore(3) 
 
     async def safe_search(term):
         async with sem:
-            return await asyncio.to_thread(cached_koha_search, term)
+            return await asyncio.to_thread(search_books, term)
 
     tasks = [safe_search(kw) for kw in keywords[:8]]
     try:
         results = await asyncio.wait_for(
             asyncio.gather(*tasks, return_exceptions=True),
-            timeout=KOHA_TIMEOUT_SECONDS + 4,
+            timeout=KOHA_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:
         logger.error("[Koha] search timeout")
@@ -181,7 +155,7 @@ async def koha_multi_search(keywords: list[str], session_id: str = "global") -> 
         return [{"answer": "Library database is unavailable or empty."}]
     return books
 
-# --- replace this function ---
+
 async def fetch_and_add_quantities(books: list[dict]) -> list[dict]:
     """
     For each book, fetch the number of available items via its biblio_id.
@@ -202,6 +176,7 @@ async def fetch_and_add_quantities(books: list[dict]) -> list[dict]:
 
     tasks = [add_quantity(book) for book in books]
     return await asyncio.gather(*tasks)
+
 
 
 # ---------- Main Route ----------
@@ -230,12 +205,14 @@ async def search_books_api(
         history_text = "\n".join(f"{'Human' if m['role'] == 'user' else 'AI'}: {m['content']}" for m in full_history[-6:])
 
         if intent in ["book_search", "book_recommend"]:
-            contextual_query = await resolve_search_topic(user_query, history_text)
+            resolver_task = asyncio.create_task(resolve_search_topic(user_query, history_text))
+            expander_task = asyncio.create_task(expand_query(user_query))
+            
+            contextual_query, keywords = await asyncio.gather(resolver_task, expander_task)
         else:
             contextual_query = user_query
-        
+            keywords = await expand_query(user_query)  
         query_clean = clean_query_text(contextual_query)
-
         # ----- Identifier Lookup (ISBN / ISSN / Call Number) -----
         if intent == "book_lookup_isbn":
             ids = extract_identifiers(user_query)

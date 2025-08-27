@@ -1,12 +1,10 @@
 import base64
 import json
 import logging
+import re
 import requests
 from typing import Any, Union, List, Dict
 from decouple import config
-from collections import defaultdict
-from cachetools import TTLCache
-import re
 
 # -------------------------------
 # Configuration
@@ -14,14 +12,9 @@ import re
 API_URL = config("KOHA_API")
 USERNAME = config("KOHA_USERNAME")
 PASSWORD = config("KOHA_PASSWORD")
-TIMEOUT = 5  # seconds
+TIMEOUT = 8# seconds
 
 logger = logging.getLogger("koha_client")
-
-# -------------------------------
-# Cache
-# -------------------------------
-_search_cache = TTLCache(maxsize=1000, ttl=300)
 
 # -------------------------------
 # Authentication Header
@@ -32,33 +25,54 @@ def get_auth_headers() -> dict[str, str]:
     token = base64.b64encode(auth.encode()).decode()
     return {
         "Authorization": f"Basic {token}",
-        "Accept": "application/json"
+        "Accept": "application/json",
     }
 
 # -------------------------------
-# Helpers for Koha query building
+# Helpers
 # -------------------------------
 def _q(obj: dict) -> str:
     return json.dumps(obj, ensure_ascii=False)
 
 def _format_list(resp_json: Any) -> list[dict[str, Any]]:
-    if not resp_json:
-        return []
-    return [format_book_data(b) for b in resp_json]
+    return [format_book_data(b) for b in resp_json] if resp_json else []
 
-def _get(url: str, headers: dict) -> Any:
-    r = requests.get(url, headers=headers, timeout=TIMEOUT)
-    r.raise_for_status()
-    return r.json()
+def _safe_request(url: str, headers: dict) -> Any:
+    """Perform GET request with unified error handling + logging."""
+    try:
+        logger.debug(f"[Koha Request] GET {url}")
+        r = requests.get(url, headers=headers, timeout=TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    except requests.Timeout:
+        logger.error(f"[Koha Request] Timeout after {TIMEOUT}s for URL: {url}")
+    except requests.RequestException as e:
+        logger.error(f"[Koha Request] Request error for URL {url}: {e}")
+    except json.JSONDecodeError as e:
+        logger.error(f"[Koha Request] JSON decode error for URL {url}: {e}")
+    except Exception as e:
+        logger.error(f"[Koha Request] Unexpected error for URL {url}: {e}")
+    return None
+
+def format_book_data(book: dict[str, Any]) -> dict[str, Any]:
+    """Formats book dictionary from Koha API into standard response schema."""
+    return {
+        "title": book.get("title", "N/A"),
+        "publisher": book.get("publisher", "N/A"),
+        "isbn": book.get("isbn", "N/A"),
+        "quantity": book.get("quantity", "N/A"),  
+        "author": book.get("author", "N/A"),
+        "year": book.get("copyright_date", "N/A"),
+        "biblio_id": book.get("biblio_id", "N/A"),
+    }
 
 # -------------------------------
 # Search Books (General)
 # -------------------------------
-def search_books(query: str, session_id: str = "global") -> Union[List[Dict[str, Any]], Dict[str, str]]:
+def search_books(query: str) -> Union[List[Dict[str, Any]], Dict[str, str]]:
     """
     Search books in Koha by title.
     Tries full query and fallback on first word.
-    Uses caching to avoid duplicate searches.
     """
     headers = get_auth_headers()
     phrases = [query]
@@ -67,28 +81,15 @@ def search_books(query: str, session_id: str = "global") -> Union[List[Dict[str,
         phrases.append(words[0])
 
     for phrase in phrases:
-        key = (session_id, "title", phrase.lower())
-        if key in _search_cache:
-            logger.info(f"[Koha Search] Cache hit for: {phrase}")
-            return _search_cache[key]
-
         params = {"title": {"-like": f"%{phrase}%"}}
         url = f"{API_URL}?q={json.dumps(params)}"
+        logger.info(f"[Koha Search] Searching title with phrase: {phrase!r}")
 
-        try:
-            logger.info(f"[Koha Search] Searching title with: {phrase}")
-            response = requests.get(url, headers=headers, timeout=TIMEOUT)
-            response.raise_for_status()
-            books = response.json()
+        data = _safe_request(url, headers)
+        if data:
+            return [format_book_data(book) for book in data]
 
-            result = [format_book_data(book) for book in books] if books else {"error": "No books found."}
-            _search_cache[key] = result
-            if books:
-                return result
-        except (requests.RequestException, json.JSONDecodeError) as e:
-            logger.error(f"[Koha Search] Error during API call for phrase '{phrase}': {e}")
-            return {"error": f"Koha API could not be reached: {e}"}
-
+    logger.warning(f"[Koha Search] No results found for query: {query!r}")
     return {"error": "No books found."}
 
 # -------------------------------
@@ -96,17 +97,15 @@ def search_books(query: str, session_id: str = "global") -> Union[List[Dict[str,
 # -------------------------------
 def fetch_quantity_from_biblio_id(biblio_id: str) -> int:
     """Fetch number of items available for a given biblio_id."""
-    try:
-        url = f"{API_URL}/{biblio_id}/items"
-        headers = get_auth_headers()
-        response = requests.get(url, headers=headers, timeout=TIMEOUT)
-        response.raise_for_status()
+    url = f"{API_URL}/{biblio_id}/items"
+    headers = get_auth_headers()
 
-        items = response.json()
-        return len(items) if isinstance(items, list) else 0
-    except Exception as e:
-        logger.error(f"[Koha] Error fetching quantity for biblio_id {biblio_id}: {e}")
-        return 0
+    data = _safe_request(url, headers)
+    if isinstance(data, list):
+        return len(data)
+
+    logger.warning(f"[Koha Quantity] No items returned for biblio_id={biblio_id}")
+    return 0
 
 # -------------------------------
 # Identifier Search
@@ -114,37 +113,34 @@ def fetch_quantity_from_biblio_id(biblio_id: str) -> int:
 FIELD_ISBN = "isbn"        
 
 def _with_period_variants(val: str) -> list[str]:
-    return list(dict.fromkeys([val, val.rstrip('.')] if val.endswith('.') else [val, f"{val}."]))
+    return [val, val.rstrip(".")] if val.endswith(".") else [val, f"{val}."]
 
 def _like_contains(value: str) -> dict:
     return {"-like": f"%{value}%"}
 
 def _perform_identifier_search(headers: dict, field: str, value: str) -> list[dict[str, Any]] | None:
     """Exact match then 'contains' match for a given field/value."""
-    try:
-        url = f"{API_URL}?q={_q({field: value})}"
-        logger.info(f"[Koha Lookup] Trying {field} (exact): {value!r}")
-        data = _get(url, headers)
-        if data:
-            out = _format_list(data)
-            for b in out:
-                b["matched_on"] = {"field": f"{field} (exact)", "value": value}
-            return out
-    except Exception as e:
-        logger.warning(f"[Koha Lookup] Error on {field} (exact) for {value!r}: {e}")
+    # Exact
+    url = f"{API_URL}?q={_q({field: value})}"
+    logger.info(f"[Koha Lookup] Trying exact {field}: {value!r}")
+    data = _safe_request(url, headers)
+    if data:
+        out = _format_list(data)
+        for b in out:
+            b["matched_on"] = {"field": f"{field} (exact)", "value": value}
+        return out
 
-    try:
-        url = f"{API_URL}?q={_q({field: _like_contains(value)})}"
-        logger.info(f"[Koha Lookup] Trying {field} (contains): {value!r}")
-        data = _get(url, headers)
-        if data:
-            out = _format_list(data)
-            for b in out:
-                b["matched_on"] = {"field": f"{field} (contains)", "value": value}
-            return out
-    except Exception as e:
-        logger.warning(f"[Koha Lookup] Error on {field} (contains) for {value!r}: {e}")
+    # Contains
+    url = f"{API_URL}?q={_q({field: _like_contains(value)})}"
+    logger.info(f"[Koha Lookup] Trying contains {field}: {value!r}")
+    data = _safe_request(url, headers)
+    if data:
+        out = _format_list(data)
+        for b in out:
+            b["matched_on"] = {"field": f"{field} (contains)", "value": value}
+        return out
 
+    logger.debug(f"[Koha Lookup] No match for {field}: {value!r}")
     return None
 
 def search_by_identifiers(identifiers: Dict[str, List[str]]) -> Union[list[dict[str, Any]], dict[str, str]]:
@@ -156,43 +152,29 @@ def search_by_identifiers(identifiers: Dict[str, List[str]]) -> Union[list[dict[
     # ISBN / ISSN
     for field in ["isbn", "issn"]:
         for value in identifiers.get(field, []):
-            variants = _with_period_variants(value)
-            for variant in variants:
+            for variant in _with_period_variants(value):
+                logger.debug(f"[Koha Lookup] Searching {field} variant: {variant!r}")
                 result = _perform_identifier_search(headers, field, variant)
                 if result:
                     return result
 
-    # Call numbers (using ISBN field in Koha)
-    call_numbers = identifiers.get("call_numbers", [])
-    if call_numbers:
-        logger.info("[Koha Lookup] No match on ISBN/ISSN. Trying Call Number search via 'isbn' field.")
-        for cn in call_numbers:
-            variants = _with_period_variants(cn)
-            variants.append(re.sub(r"\s+", " ", cn).strip())
-            variants.append(cn.replace(".", " ").strip())
-            seen = set()
-            variants = [v for v in variants if not (v in seen or seen.add(v))]
+    # Call numbers (fallback via ISBN field)
+    for cn in identifiers.get("call_numbers", []):
+        variants = _with_period_variants(cn)
+        variants += [
+            re.sub(r"\s+", " ", cn).strip(),
+            cn.replace(".", " ").strip(),
+        ]
+        seen = set()
+        variants = [v for v in variants if not (v in seen or seen.add(v))]
 
-            for variant in variants:
-                result = _perform_identifier_search(headers, "isbn", variant)
-                if result:
-                    for book in result:
-                        book["matched_on"]["field"] = "isbn (callno-search)"
-                    return result
+        for variant in variants:
+            logger.debug(f"[Koha Lookup] Searching call number variant: {variant!r}")
+            result = _perform_identifier_search(headers, "isbn", variant)
+            if result:
+                for book in result:
+                    book["matched_on"]["field"] = "isbn (callno-search)"
+                return result
 
+    logger.warning("[Koha Lookup] No matches found for identifiers.")
     return {"error": "No matching records found."}
-
-# -------------------------------
-# Helpers
-# -------------------------------
-def format_book_data(book: dict[str, Any]) -> dict[str, Any]:
-    """Formats book dictionary from Koha API into standard response schema."""
-    return {
-        "title": book.get("title", "N/A"),
-        "publisher": book.get("publisher", "N/A"),
-        "isbn": book.get("isbn", "N/A"),
-        "quantity": book.get("quantity", "N/A"),
-        "author": book.get("author", "N/A"),
-        "year": book.get("copyright_date", "N/A"),
-        "biblio_id": book.get("biblio_id", "N/A"),
-    }
