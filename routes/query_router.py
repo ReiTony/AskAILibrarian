@@ -54,8 +54,19 @@ async def query_router(
 
         # --- Central Intent Classification ---
         try:
-            intent = await classify_intent(user_query, history_text)
-            logger.info(f"Detected intent: '{intent}'")
+            lowered = user_query.lower().strip()
+            if lowered in {"more", "more please", "another", "show me more", "else"}:
+                last_intent = None
+                if full_history:
+                    for msg in reversed(full_history):
+                        if msg.get("intent") in {"book_search", "book_recommend"}:
+                            last_intent = msg["intent"]
+                            break
+                intent = last_intent or "book_search"  
+                logger.info(f"Follow-up query detected ('{user_query}'). Forcing intent: {intent}")
+            else:
+                intent = await classify_intent(user_query, history_text)
+                logger.info(f"Detected intent: '{intent}'")
         except Exception as e:
             logger.error(f"Intent classifier failed: {e}. Defaulting to general_info.")
             intent = "general_info"

@@ -112,7 +112,9 @@ async def expand_query(user_query: str) -> list[str]:
         "- Prefer concrete book title terms.\n"
         "- Avoid made-up phrases.\n"
         "- Do NOT return generic terms like 'books', 'novels', 'stories'.\n"
-        "- Do not repeat keywords."
+        "- Do not repeat keywords.\n"
+        "- Don't return specific book titles.\n"
+        "- Avoid returning incoherent phrases."
     )
     try:
         raw = await generate_response(prompt)

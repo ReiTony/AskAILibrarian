@@ -10,7 +10,7 @@ client = AsyncGroq(
 SITE_URL = config("SITE_URL", default="http://localhost")
 SITE_TITLE = config("SITE_TITLE", default="Librarian Chatbot")
 
-MODEL_NAME = "qwen/qwen3-32b"
+MODEL_NAME = "openai/gpt-oss-20b"
 logger = logging.getLogger("llm_client")
 
 async def generate_response(prompt: str) -> str:
@@ -28,7 +28,7 @@ async def generate_response(prompt: str) -> str:
             max_tokens=2024,
             top_p=0.9,
             reasoning_format="hidden",
-            reasoning_effort="none",
+            reasoning_effort="low",
         )
 
         return chat_completion.choices[0].message.content
