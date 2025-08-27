@@ -25,7 +25,7 @@ AskAILibrarian/
 └── utils/                  # LLM, Koha and Chroma helpers
 ```
 
-> **Note:** `utils/chroma/_chroma_init.py` and `_get_embedding_function.py` are imported but absent; ensure these exist for Chroma initialization.
+> **Note:** `utils/chroma/_chroma_init.py` and `_get_embedding_function.py` are imported but absent, due to sensitive information 
 
 ---
 
@@ -46,7 +46,6 @@ Create a `.env` file or otherwise supply the following variables:
 | Variable | Description |
 |----------|-------------|
 | `MONGO_URI` | MongoDB connection string |
-| `JWT_SECRET` | Secret for JWT tokens |
 | `KOHA_API`, `KOHA_USERNAME`, `KOHA_PASSWORD` | Koha REST API credentials |
 | `GROQ1` | Groq API key |
 | `SITE_URL`, `SITE_TITLE` | (Optional) metadata for prompts |
@@ -75,12 +74,6 @@ The application also exposes health checks at `GET /` and `GET /health`.
 ---
 
 ## API Overview
-
-### Authentication – `/api/auth`
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/login` | POST   | Authenticate with `cardnumber` & `password`; returns JWT |
 
 ### Chat History – `/api/chat`
 
