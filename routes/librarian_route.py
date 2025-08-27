@@ -110,7 +110,9 @@ async def expand_query(user_query: str) -> list[str]:
         f"User topic: {user_query!r}\n\n"
         "Rules:\n- Return ONLY a comma-separated list (no bullets, no numbering).\n"
         "- Prefer concrete book title terms.\n"
-        "- Avoid made-up phrases."
+        "- Avoid made-up phrases.\n"
+        "- Do NOT return generic terms like 'books', 'novels', 'stories'.\n"
+        "- Do not repeat keywords."
     )
     try:
         raw = await generate_response(prompt)
