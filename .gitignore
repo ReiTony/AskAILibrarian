@@ -1,4 +1,6 @@
-# Dependencies
+# ----------------------
+# Node.js dependencies
+# ----------------------
 node_modules/
 /dist
 /.pnp
@@ -28,7 +30,13 @@ pids
 /coverage
 /.nyc_output
 
+# Production build files
+/build
+/dist
+
+# ----------------------
 # IDEs and editors
+# ----------------------
 /.idea
 .project
 .classpath
@@ -38,11 +46,9 @@ pids
 *.sublime-workspace
 .vscode/
 
-# Production build files
-/build
-/dist
-
+# ----------------------
 # Misc
+# ----------------------
 .DS_Store
 *.pem
 .cache
@@ -68,13 +74,53 @@ yarn-error.log*
 # Yarn Integrity file
 .yarn-integrity
 
+# ----------------------
 # Python-related
+# ----------------------
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.so
+*.egg-info/
+.eggs/
 
-# Exclude virtual env and other project folders
+# Virtual environments
+.venv/
 venv/
+ENV/
+env/
+
+# Jupyter
+.ipynb_checkpoints
+
+# ----------------------
+# Rasa-specific
+# ----------------------
+# Trained models
+/models/
+/rasa/models/
+*.tar.gz
+
+# Logs and trackers
+*.db
+*.db-shm
+*.db-wal
+events.out.tfevents.*
+
+# Temporary files
+/.rasa/cache/
+/.rasa/tmp/
+
+/.rasa/dialogue_graphs/
+/.rasa/storage/
+/rasa/.rasa/
+
+# ----------------------
+# Project-specific
+# ----------------------
 chroma/
-data/
+data/        # <- careful: only ignore if this is generated, not your Rasa training data
 db_populate/
 deprecated/
