@@ -89,6 +89,7 @@ __pycache__/
 # Virtual environments
 .venv/
 venv/
+venv_librarian/
 ENV/
 env/
 
