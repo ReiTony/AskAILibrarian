@@ -13,7 +13,6 @@ logging.basicConfig(
 )
 
 # App Imports
-from routes.authentication_route import router as auth_router
 from routes.chat_route import router as chat_router
 from routes.library_info_route import router as library_info_route
 from routes.librarian_route import router as search_books_router
@@ -46,7 +45,6 @@ app.add_middleware(
 Instrumentator().instrument(app).expose(app)
 
 # Routers
-app.include_router(auth_router, prefix="/api/auth", tags=["User Authentication"])
 app.include_router(chat_router, prefix="/api/chat", tags=["Chatbot"])
 app.include_router(library_info_route, prefix="/api/library", tags=["Library Information"])
 app.include_router(search_books_router, prefix="/api/search", tags=["Book Search"])
