@@ -90,6 +90,7 @@ __pycache__/
 .venv/
 venv/
 venv_librarian/
+venv_rasa/
 ENV/
 env/
 
