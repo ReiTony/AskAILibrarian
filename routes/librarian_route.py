@@ -11,7 +11,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from utils.llm_client import generate_response
 from utils.koha_client import (
     search_books,
-    fetch_quantity_from_biblio_id,
+    fetch_items_for_multiple_biblios,
     search_by_identifiers,
 )
 
@@ -161,27 +161,39 @@ async def koha_multi_search(keywords: list[str]) -> list[dict]:
 
 
 async def fetch_and_add_quantities(books: list[dict]) -> list[dict]:
-    """
-    For each book, fetch the number of available items via its biblio_id.
-    """
-    async def add_quantity(book: dict) -> dict:
-        biblio_id = book.get("biblio_id")
-        if not biblio_id or biblio_id == "N/A":
+    # Collect all valid biblio_ids
+    biblio_ids = list(set(
+        book.get("biblio_id") for book in books if book.get("biblio_id") and book.get("biblio_id") != "N/A"
+    ))
+
+    if not biblio_ids:
+        # If no valid biblio_ids, default all to 0
+        for book in books:
             book["quantity_available"] = 0
-            return book
+        return books
 
-        try:
-            qty = await asyncio.to_thread(fetch_quantity_from_biblio_id, biblio_id)
-            book["quantity_available"] = qty
-        except Exception as e:
-            logger.error(f"[Quantity Fetch] Error for biblio_id {biblio_id}: {e}")
+    try:
+        items_by_biblio = await asyncio.to_thread(fetch_items_for_multiple_biblios, biblio_ids)
+
+        for book in books:
+            biblio_id_str = book.get("biblio_id")
+            book["quantity_available"] = 0  # default
+
+            if biblio_id_str:
+                try:
+                    biblio_id_int = int(biblio_id_str)  
+                    if biblio_id_int in items_by_biblio:
+                        book["quantity_available"] = len(items_by_biblio[biblio_id_int])
+                except (ValueError, TypeError):
+                    # Ignore invalid IDs (like "N/A")
+                    pass
+    except Exception as e:
+        logger.error(f"[Quantity Fetch] Batch fetch error: {e}")
+        # Fallback: mark all as 0
+        for book in books:
             book["quantity_available"] = 0
-        return book
 
-    tasks = [add_quantity(book) for book in books]
-    return await asyncio.gather(*tasks)
-
-
+    return books
 
 # ---------- Main Route ----------
 @router.post("/search_books")

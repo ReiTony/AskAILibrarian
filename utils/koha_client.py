@@ -5,6 +5,7 @@ import re
 import requests
 from typing import Any, Union, List, Dict
 from decouple import config
+from collections import defaultdict
 
 # -------------------------------
 # Configuration
@@ -12,7 +13,7 @@ from decouple import config
 API_URL = config("KOHA_API")
 USERNAME = config("KOHA_USERNAME")
 PASSWORD = config("KOHA_PASSWORD")
-TIMEOUT = 8# seconds
+TIMEOUT = 8  # seconds
 
 logger = logging.getLogger("koha_client")
 
@@ -60,7 +61,7 @@ def format_book_data(book: dict[str, Any]) -> dict[str, Any]:
         "title": book.get("title", "N/A"),
         "publisher": book.get("publisher", "N/A"),
         "isbn": book.get("isbn", "N/A"),
-        "quantity": book.get("quantity", "N/A"),  
+        "quantity": book.get("quantity", "N/A"),
         "author": book.get("author", "N/A"),
         "year": book.get("copyright_date", "N/A"),
         "biblio_id": book.get("biblio_id", "N/A"),
@@ -107,10 +108,41 @@ def fetch_quantity_from_biblio_id(biblio_id: str) -> int:
     logger.warning(f"[Koha Quantity] No items returned for biblio_id={biblio_id}")
     return 0
 
+def fetch_items_for_multiple_biblios(biblio_ids: List[Union[str, int]]) -> Dict[int, List[Dict]]:
+    """
+    Fetches all items for a given list of biblio_ids in a single API call.
+
+    Args:
+        biblio_ids: A list of biblio_id integers or strings.
+
+    Returns:
+        A dictionary mapping each biblio_id to a list of its item records.
+        Example: {101: [{item1_data}, {item2_data}], 204: [{item3_data}]}
+    """
+    if not biblio_ids:
+        return {}
+
+    clean_biblio_ids = [int(bid) for bid in biblio_ids]  # ensure integers
+    headers = get_auth_headers()
+    params = {"biblio_id": clean_biblio_ids}
+
+    # Replace /biblios with /items in URL for item fetching
+    items_url = API_URL.replace("/biblios", "/items")
+    url = f"{items_url}?q={json.dumps(params)}"
+
+    data = _safe_request(url, headers)
+    items_by_biblio = defaultdict(list)
+
+    if isinstance(data, list):
+        for item in data:
+            items_by_biblio[item.get("biblio_id")].append(item)
+
+    return items_by_biblio
+
 # -------------------------------
 # Identifier Search
 # -------------------------------
-FIELD_ISBN = "isbn"        
+FIELD_ISBN = "isbn"
 
 def _with_period_variants(val: str) -> list[str]:
     return [val, val.rstrip(".")] if val.endswith(".") else [val, f"{val}."]
