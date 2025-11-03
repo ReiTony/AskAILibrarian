@@ -1,0 +1,135 @@
+version: "3.1"
+
+nlu:
+- intent: general_query
+  examples: |
+    - what is this library about?
+    - can you help me?
+    - tell me a joke
+    - what are your features?
+    - who created you?
+    - how do I use this system?
+    - explain what you can do
+    - hey
+    - hello
+    - hi
+    - hello there
+    - good morning
+    - good evening
+    - moin
+    - hey there
+    - let's go
+    - hey dude
+    - goodmorning
+    - goodevening
+    - good afternoon
+    - yes
+    - y
+    - indeed
+    - of course
+    - that sounds good
+    - correct
+
+
+
+- intent: goodbye
+  examples: |
+    - cu
+    - good by
+    - see you later
+    - good night
+    - bye
+    - goodbye
+    - have a nice day
+    - see you around
+    - bye bye
+    - see you later
+
+- intent: deny
+  examples: |
+    - no
+    - n
+    - never
+    - I don't think so
+    - don't like that
+    - no way
+    - not really
+
+- intent: mood_great
+  examples: |
+    - perfect
+    - great
+    - amazing
+    - feeling like a king
+    - wonderful
+    - I am feeling very good
+    - I am great
+    - I am amazing
+    - I am going to save the world
+    - super stoked
+    - extremely good
+    - so so perfect
+    - so good
+    - so perfect
+
+- intent: mood_unhappy
+  examples: |
+    - my day was horrible
+    - I am sad
+    - I don't feel very well
+    - I am disappointed
+    - super sad
+    - I'm so sad
+    - sad
+    - very sad
+    - unhappy
+    - not good
+    - not very good
+    - extremely sad
+    - so saad
+    - so sad
+
+- intent: bot_challenge
+  examples: |
+    - are you a bot?
+    - are you a human?
+    - am I talking to a bot?
+    - am I talking to a human?
+
+# --- library intent ---
+- intent: search_book
+  examples: |
+    - Do you have [Harry Potter](title)?
+    - Search for ISBN [9780439554930](isbn)
+    - Find me books by [Neil Gaiman](author)
+    - I want to check if [The Hobbit](title) is available
+    - Any books written by [J.K. Rowling](author)?
+    - find [math books](title)
+    - look for [science books](title)
+    - show me [history books](title)
+    - are there [biology textbooks](title) in the library?
+    - do you have [chemistry books](title)?
+    - find [programming books](title)
+    - search for [machine learning](title)
+    - do you have [Lord of the Rings](title)?
+    - I’m looking for [George Orwell](author)
+    - books authored by [Stephen King](author)
+    - can you find [Pride and Prejudice](title)?
+    - do you have [ISBN 9780140449136](isbn)?
+    - get me books with ISBN [9780261103573](isbn)
+    - show books by [Agatha Christie](author)
+    - is there a copy of [To Kill a Mockingbird](title)?
+    - search for [Artificial Intelligence](title)
+    - do you have anything by [Ernest Hemingway](author)?
+    - look up [ISBN 9780316769488](isbn)
+    - check if [Database Systems](title) is available
+    - I want to borrow [Gulliver's Travels](title)
+  
+- intent: lookup_isbn
+  examples: |
+    - find book with ISBN [9780131103627](isbn)
+    - lookup ISBN [0439139597](isbn)
+    - search ISBN [123456789X](isbn)
+    - show me the book with ISBN [9780262033848](isbn)
+    - find this ISBN [9780201633610](isbn)
+    - do you have this ISBN [9780131101630](isbn)?

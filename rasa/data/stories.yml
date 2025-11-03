@@ -1,0 +1,45 @@
+version: "3.1"
+
+stories:
+
+- story: happy path
+  steps:
+  - intent: greet
+  - action: utter_greet
+  - intent: mood_great
+  - action: utter_happy
+
+- story: sad path 1
+  steps:
+  - intent: greet
+  - action: utter_greet
+  - intent: mood_unhappy
+  - action: utter_cheer_up
+  - action: utter_did_that_help
+  - intent: affirm
+  - action: utter_happy
+
+- story: sad path 2
+  steps:
+  - intent: greet
+  - action: utter_greet
+  - intent: mood_unhappy
+  - action: utter_cheer_up
+  - action: utter_did_that_help
+  - intent: deny
+  - action: utter_goodbye
+
+- story: search book path
+  steps:
+  - intent: search_book
+  - action: action_search_book
+
+- story: isbn lookup path
+  steps:
+  - intent: lookup_isbn
+  - action: action_lookup_isbn
+
+- story: general query path
+  steps:
+  - intent: general_query
+  - action: action_general_query

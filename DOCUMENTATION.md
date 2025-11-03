@@ -2,9 +2,7 @@
 
 ## Overview
 
-AskAILibriarian is a Python-based assistant for library/book discovery and conversational interfaces. It combines a small web API with vector search (Chroma), a local SQLite-backed dataset of book/web embeddings, and optional Rasa-based conversational automation. This document is a handover / turnover guide describing the project layout, setup, run steps, major components, and troubleshooting notes.
-
-Intended audience: developers taking over the repository, DevOps engineers preparing deployments, and product owners who need an understanding of capabilities and integration points.
+AskAILibriarian is a Python-based assistant for library/book discovery and conversational interfaces. It combines a small web API with vector search (Chroma), a local SQLite-backed dataset of book/web embeddings, and optional Rasa-based conversational automation. This document is a guide describing the project layout, setup, run steps, major components, and troubleshooting notes.
 
 ---
 
@@ -70,7 +68,7 @@ If the app exposes an HTTP port, the console will show which port (commonly 8000
 High-level layout (important files and purpose):
 
 - `main.py` — application entrypoint. Start here to see the actual server used (Flask/FastAPI/other).
-- `README.md` — project README (short); this file is the full turnover doc.
+- `README.md` — project README (short);
 
 Primary folders:
 - `routes/` — HTTP routes; main API layer. Key files: `librarian_route.py`, `query_router.py`, `rasa_route.py`, `library_info_route.py`.
@@ -429,15 +427,6 @@ Logging tips:
 - For production: containerize the app (Docker) and mount volumes for Chroma sqlite files so indices persist.
 - Scale LLM calls and Chroma reads with a horizontally scalable architecture: move Chroma to a service-backed store if needed, or shard indices by dataset.
 - Rasa should run in its own container/host, with secure communication between Rasa and this app.
-
----
-
-## Next steps and recommendations for handover
-
-- Add unit tests for main routes and add CI (GitHub Actions) to run tests and linting.
-- Create a small script for automated Chroma index backup (cron or scheduled job).
-- Extract LLM and Chroma configuration into a single config file or environment schema for easier deployments.
-- Document the exact environment variables used by `utils/llm_client.py` and other modules into a `.env.example` for operators.
 
 ---
 
